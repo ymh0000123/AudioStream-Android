@@ -35,11 +35,24 @@ jobs:
             gradle/wrapper/gradle-wrapper.properties
           cat gradle/wrapper/gradle-wrapper.properties
 
+      # settings.gradle.kts 默认走阿里云镜像(境内开发机用),CI 上让 google()/mavenCentral() 优先
+      - name: Prefer official Maven repositories on CI
+        run: |
+          sed -i 's#maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }##g' \
+            settings.gradle.kts
+          sed -i 's#maven { url = uri("https://maven.aliyun.com/repository/google") }##g' \
+            settings.gradle.kts
+          sed -i 's#maven { url = uri("https://maven.aliyun.com/repository/central") }##g' \
+            settings.gradle.kts
+          sed -i 's#maven { url = uri("https://maven.aliyun.com/repository/public") }##g' \
+            settings.gradle.kts
+          echo "--- patched settings.gradle.kts ---"; cat settings.gradle.kts
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew clean assembleDebug --no-daemon --stacktrace
+        run: ./gradlew clean assembleDebug --no-daemon --no-configuration-cache --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
