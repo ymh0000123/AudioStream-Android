@@ -1,0 +1,36 @@
+# Gradle / 构建产物
+.gradle
+/build
+/app/build
+/.gradle/
+/.kotlin/
+/captures
+.externalNativeBuild
+.cxx
+
+# IDEA / Android Studio
+/.idea
+*.iml
+
+# 本地配置(含签名口令等敏感信息)
+/local.properties
+
+# macOS
+.DS_Store
+
+# 签名密钥(由 build 脚本在缺失时自动生成,不入仓库)
+/xiaofeishu.keystore
+*.keystore
+*.jks
+
+# AI / 工具本地配置(与项目源码无关)
+/.nezha
+/.claude/plan-fix-playback.md
+/.claude/settings.local.json
+/.mimocode
+/.opencode
+/.agents
+
+# 本地日志 / 草稿
+/crash-logs
+/build - 副本.ps1
