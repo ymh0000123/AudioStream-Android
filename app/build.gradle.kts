@@ -29,9 +29,12 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("../xiaofeishu.keystore")
-            storePassword = localProps.getProperty("KEYSTORE_PASSWORD", "xiaofeishu")
-            keyAlias = localProps.getProperty("KEY_ALIAS", "xiaofeishu")
-            keyPassword = localProps.getProperty("KEY_PASSWORD", "xiaofeishu")
+            storePassword = System.getenv("KEYSTORE_PASSWORD")
+                ?: localProps.getProperty("KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("KEY_ALIAS")
+                ?: localProps.getProperty("KEY_ALIAS")
+            keyPassword = System.getenv("KEY_PASSWORD")
+                ?: localProps.getProperty("KEY_PASSWORD")
         }
     }
 
