@@ -53,7 +53,10 @@ object AppModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)   // 流式，无读超时
-        .pingInterval(15, TimeUnit.SECONDS)       // WebSocket 保活
+        // WebSocket 心跳：锁屏后 Doze 会延迟/挂起 socket 收发，ping 间隔需显著小于服务端
+        // 读空闲超时，否则连接被服务端判定死亡而断开（锁屏长播断连根因）。10s 在电量
+        // 开销与保活可靠性间取折中；配合 wifiLock+wakeLock 让 reader 线程在线发心跳。
+        .pingInterval(10, TimeUnit.SECONDS)      // WebSocket 保活
         .build()
 
     @Provides

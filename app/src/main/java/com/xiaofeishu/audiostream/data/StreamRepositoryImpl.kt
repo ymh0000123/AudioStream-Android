@@ -18,6 +18,7 @@ import com.xiaofeishu.audiostream.network.AudioEvent
 import com.xiaofeishu.audiostream.network.protocol.AudioProtocol
 import com.xiaofeishu.audiostream.network.protocol.AudioProtocolFactory
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -56,11 +57,16 @@ class StreamRepositoryImpl @Inject constructor(
 
     private var collectJob: Job? = null
     private var reconnectJob: Job? = null
+    private var watchdogJob: Job? = null
     @Volatile private var manualDisconnect = false
     @Volatile private var autoReconnectEnabled = false
     @Volatile private var activeProtocol: AudioProtocol? = null
     @Volatile private var localPlaybackAllowed = true
     @Volatile private var lastAudioDataAtMs = 0L
+    @Volatile private var sessionStartedAtMs = 0L
+    @Volatile private var audioFramesReceived = 0L
+    @Volatile private var currentServer: ServerInfo? = null
+    @Volatile private var currentAttempt = 0
 
     init {
         // 跟随设置中的自动重连开关
@@ -113,6 +119,9 @@ class StreamRepositoryImpl @Inject constructor(
 
     private fun startSession(server: ServerInfo, attempt: Int) {
         collectJob?.cancel()
+        watchdogJob?.cancel()
+        currentServer = server
+        currentAttempt = attempt
         val protocol = protocolFactory.create(server.protocol)
         activeProtocol = protocol
         collectJob = appScope.launch {
@@ -120,7 +129,7 @@ class StreamRepositoryImpl @Inject constructor(
                 val targetBitrate = settingsRepository.loadTargetBitrate()
                 _state.value = _state.value.copy(currentBitrate = targetBitrate)
                 // 协议层已有握手超时（WebSocket handshakeTimeout），
-                // 会及时 emit Error/Disconnected 事件，此处 collectLatest 只需正常分发。
+                // 会及时 emit Error/Disconnected 事件，此处 collect 只需正常分发。
                 protocol.connect(server.address, server.port, targetBitrate).collect { event ->
                     when (event) {
                         is AudioEvent.Connected -> onConnected(server, event)
@@ -131,6 +140,12 @@ class StreamRepositoryImpl @Inject constructor(
                         is AudioEvent.BitrateChanged -> onBitrateChanged(event)
                     }
                 }
+            } catch (e: CancellationException) {
+                // 取消不是错误：watchdog 超时、disconnect、用户重连都会 cancel collectJob，
+                // 此时清理与重连已由发起方（startWatchdog / disconnect / startSession）负责，
+                // 绝不能落进下面的 onError——否则会把 JobCancellationException 当成连接异常
+                // 上屏，并触发第二次 maybeReconnect 与 watchdog 的重连竞态。
+                throw e
             } catch (e: Exception) {
                 onError(server, e, attempt)
             }
@@ -149,6 +164,9 @@ class StreamRepositoryImpl @Inject constructor(
         currentPlayer = player
         val targetBitrate = _state.value.currentBitrate
         bitrateTracker.reset()
+        sessionStartedAtMs = System.currentTimeMillis()
+        audioFramesReceived = 0L
+        lastAudioDataAtMs = 0L  // 每个会话独立计时：重连会话不复用上次会话的音频时间戳
         _state.value = _state.value.copy(
             connectionState = ConnectionState.CONNECTED,
             audioFormat = event.format,
@@ -163,9 +181,47 @@ class StreamRepositoryImpl @Inject constructor(
                 activeProtocol?.send(MediaAction.GET_STATE.toJson())
             }
         }
+        startWatchdog()
+    }
+
+    /**
+     * 连接健康看门狗：锁屏后 WiFi 抖动会让 socket 失活，但 OkHttp reader 会一直阻塞在
+     * socketRead 上（最长 30+ 秒才被 OS abort），这期间无声且无重连。看门狗每秒检查
+     * [lastAudioDataAtMs]，超过 [WATCHDOG_STALL_MS] 无音频即主动断开并立即重连，把无声从
+     * 30+ 秒压到 ~10 秒。仅当收到过音频（lastAudioDataAtMs>0）后启用，握手期间不误杀。
+     */
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = appScope.launch {
+            while (true) {
+                delay(WATCHDOG_CHECK_MS)
+                val lastAudio = lastAudioDataAtMs
+                // 仅在开启自动重连时主动断开重连：未开启时让连接维持原状（用户不想自动恢复）。
+                if (autoReconnectEnabled && lastAudio > 0 &&
+                    System.currentTimeMillis() - lastAudio > WATCHDOG_STALL_MS
+                ) {
+                    android.util.Log.w("AudioStreamWatchdog",
+                        "无音频 ${System.currentTimeMillis() - lastAudio}ms 超过 ${WATCHDOG_STALL_MS}ms，主动断开重连")
+                    val server = currentServer ?: return@launch
+                    val attempt = currentAttempt
+                    // 取消 collectJob 触发 awaitClose 关闭 socket；collect 的 catch 分支会 rethrow
+                    // CancellationException 正常结束，不再走 onError，故重连只由下方 maybeReconnect 负责。
+                    collectJob?.cancel()
+                    reconnectJob?.cancel()
+                    teardownPlayer()
+                    _state.value = _state.value.copy(
+                        connectionState = ConnectionState.DISCONNECTED,
+                        mediaState = null
+                    )
+                    maybeReconnect(server, attempt)
+                    return@launch
+                }
+            }
+        }
     }
 
     private suspend fun onAudioData(event: AudioEvent.AudioData) {
+        audioFramesReceived += 1
         val player = currentPlayer ?: return
         if (localPlaybackAllowed) {
             // AudioTrack.write 是阻塞调用，独占播放线程，避免与 Default 调度器上的
@@ -195,23 +251,38 @@ class StreamRepositoryImpl @Inject constructor(
     }
 
     private fun onDisconnected(server: ServerInfo, reason: String, attempt: Int) {
+        watchdogJob?.cancel()
         teardownPlayer()
+        android.util.Log.w("AudioStreamRepo", "onDisconnected: $reason ${idleDiagnostic()}")
         _state.value = _state.value.copy(
             connectionState = ConnectionState.DISCONNECTED,
-            error = reason,
+            error = reason.ifBlank { "连接已断开" },
             mediaState = null
         )
         maybeReconnect(server, attempt)
     }
 
     private fun onError(server: ServerInfo, error: Throwable, attempt: Int) {
+        watchdogJob?.cancel()
         teardownPlayer()
+        val reason = error.message ?: error::class.java.simpleName
+        android.util.Log.w("AudioStreamRepo", "onError: ${error::class.java.name}: $reason ${idleDiagnostic()}", error)
         _state.value = _state.value.copy(
             connectionState = ConnectionState.ERROR,
-            error = error.message ?: error::class.java.simpleName,
+            error = reason,
             mediaState = null
         )
         maybeReconnect(server, attempt)
+    }
+
+    /** 断连诊断：会话已存活多久 + 距上次收到音频多久 + 本会话收到的音频帧数。区分
+     *  服务端读空闲超时（idle 大）、服务端在正常推流中突然裸关连接（idle≈0，frames>0）、
+     *  与握手成功后从未收到音频（frames=0 → onConnected 后无 AudioData，疑似 player 异常）。 */
+    private fun idleDiagnostic(): String {
+        val now = System.currentTimeMillis()
+        val sessionMs = if (sessionStartedAtMs > 0) now - sessionStartedAtMs else -1
+        val idleMs = if (lastAudioDataAtMs > 0) now - lastAudioDataAtMs else -1
+        return "[会话 ${sessionMs}ms, 距上次音频 ${idleMs}ms, 收到音频帧 ${audioFramesReceived}]"
     }
 
     private fun maybeReconnect(server: ServerInfo, attempt: Int) {
@@ -221,9 +292,12 @@ class StreamRepositoryImpl @Inject constructor(
         // 用 attempt 派生抖动（避免受限环境使用随机）：±10% 内确定值
         val jitter = (baseDelay / 10) * ((nextAttempt % 3) - 1)
         val delayMs = max(RECONNECT_BASE_DELAY_MS, baseDelay + jitter)
+        // 保留上次断连原因，仅追加重连进度，便于定位“锁屏长播断连”根因
+        // （旧逻辑直接覆盖成“重连中…”，真实异常被吞，无法诊断）。
+        val prevReason = _state.value.error ?: "连接已断开"
         _state.value = _state.value.copy(
             connectionState = ConnectionState.CONNECTING,
-            error = "重连中（第 $nextAttempt 次，${delayMs / 1000}s 后重试）",
+            error = "$prevReason（重连中第 $nextAttempt 次，${delayMs / 1000}s 后重试）",
             reconnectAttempt = nextAttempt
         )
         reconnectJob?.cancel()
@@ -239,6 +313,7 @@ class StreamRepositoryImpl @Inject constructor(
         manualDisconnect = true
         localPlaybackAllowed = true
         lastAudioDataAtMs = 0L
+        watchdogJob?.cancel()
         reconnectJob?.cancel()
         collectJob?.cancel()
         activeProtocol = null
@@ -409,10 +484,15 @@ class StreamRepositoryImpl @Inject constructor(
     companion object {
         private const val WINDOW_MS = 1000L
         private const val RECONNECT_BASE_DELAY_MS = 1000L
-        private const val RECONNECT_MAX_DELAY_MS = 30_000L
+        private const val RECONNECT_MAX_DELAY_MS = 8_000L
         private const val DEFAULT_TARGET_BITRATE = 1536
         private const val STATE_REFRESH_DELAY_MS = 500L
         private const val STREAM_ACTIVE_GRACE_MS = 2_000L
+        /** 看门狗：无音频超过此时长即判定 socket 失活，主动断开重连。
+         *  10s 平衡误杀风险与恢复速度——锁屏后 WiFi 抖动常让 socket 在 30+ 秒才被 OS abort，
+         *  此前无声。略大于正常帧间隔抖动，避免服务端短暂卡顿误触发。 */
+        private const val WATCHDOG_STALL_MS = 10_000L
+        private const val WATCHDOG_CHECK_MS = 1_000L
 
         private fun normalizeTargetBitrate(bitrate: Int): Int {
             return if (bitrate > 0) bitrate else DEFAULT_TARGET_BITRATE

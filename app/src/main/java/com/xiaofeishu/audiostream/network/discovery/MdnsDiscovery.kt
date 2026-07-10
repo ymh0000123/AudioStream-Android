@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.callbackFlow
 /**
  * mDNS 服务发现封装。发现 _audiostream._tcp. 服务并解析为 [ServerInfo]。
  *
- * 修复：用 Map 跟踪每个已注册的 ServiceInfoCallback，stopDiscovery 时全部 unregister，
- * 避免旧版用单一字段覆盖导致早期回调泄漏。
+ * 版本适配：API 29+ 用 [NsdManager.registerServiceInfoCallback]（可多次回调、需 unregister）；
+ * API < 29 回退到 [NsdManager.resolveService]（一次性回调）。旧 API 没有 ServiceInfoCallback 类，
+ * 直接引用会 NoClassDefFoundError，故把对 ServiceInfoCallback 的所有引用隔离进独立方法
+ * [registerServiceInfoCallbackQ] / [unregisterAllQ]——它们仅在 SDK_INT >= Q 时被调用，
+ * Android 9 的 ART 永不 verify 这些方法、永不解析 ServiceInfoCallback。
  * 多播锁（MulticastLock）由上层 DiscoveryRepository 管理。
  */
 class MdnsDiscovery(context: Context) {
@@ -24,41 +27,37 @@ class MdnsDiscovery(context: Context) {
     private val mainExecutor = ContextCompat.getMainExecutor(appContext)
 
     private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private val serviceInfoCallbacks = mutableMapOf<NsdServiceInfo, NsdManager.ServiceInfoCallback>()
+    // 仅 API 29+ 使用；用 Any 持有避免本类字段类型直接引用 ServiceInfoCallback
+    private val serviceInfoCallbacks = mutableMapOf<NsdServiceInfo, Any>()
+
+    private fun emit(info: NsdServiceInfo, trySend: (ServerInfo) -> Unit) {
+        val host = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            info.hostAddresses.firstOrNull()?.hostAddress
+        } else {
+            @Suppress("DEPRECATION")
+            info.host?.hostAddress
+        }
+        if (!host.isNullOrEmpty()) {
+            trySend(ServerInfo(name = info.serviceName, address = host, port = info.port))
+        }
+    }
 
     fun discover(serviceType: String = DEFAULT_SERVICE_TYPE): Flow<ServerInfo> = callbackFlow {
         discoveryListener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {}
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                val callback = object : NsdManager.ServiceInfoCallback {
-                    override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {}
-
-                    override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
-                        val host = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            serviceInfo.hostAddresses.firstOrNull()?.hostAddress
-                        } else {
-                            @Suppress("DEPRECATION")
-                            serviceInfo.host?.hostAddress
-                        }
-                        if (!host.isNullOrEmpty()) {
-                            trySend(
-                                ServerInfo(
-                                    name = serviceInfo.serviceName,
-                                    address = host,
-                                    port = serviceInfo.port
-                                )
-                            )
-                        }
-                    }
-
-                    override fun onServiceLost() {}
-                    override fun onServiceInfoCallbackUnregistered() {}
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    registerServiceInfoCallbackQ(serviceInfo) { trySend(it) }
+                } else {
+                    // API < 29：旧 resolveService（一次性）。同一服务多次发现会重复 resolve，
+                    // 忽略重复 resolve 的异常即可，不影响可用性。
+                    @Suppress("DEPRECATION")
+                    nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                        override fun onServiceResolved(serviceInfo: NsdServiceInfo) = emit(serviceInfo) { trySend(it) }
+                    })
                 }
-                synchronized(serviceInfoCallbacks) {
-                    serviceInfoCallbacks[serviceInfo] = callback
-                }
-                nsdManager.registerServiceInfoCallback(serviceInfo, mainExecutor, callback)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
@@ -88,9 +87,32 @@ class MdnsDiscovery(context: Context) {
             try { nsdManager.stopServiceDiscovery(it) } catch (_: Exception) {}
         }
         discoveryListener = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            unregisterAllQ()
+        }
+    }
+
+    /** 仅 API 29+ 调用。隔离对 ServiceInfoCallback 的引用，避免 Android 9 类解析失败。 */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun registerServiceInfoCallbackQ(serviceInfo: NsdServiceInfo, trySend: (ServerInfo) -> Unit) {
+        val callback = object : NsdManager.ServiceInfoCallback {
+            override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {}
+            override fun onServiceUpdated(serviceInfo: NsdServiceInfo) = emit(serviceInfo, trySend)
+            override fun onServiceLost() {}
+            override fun onServiceInfoCallbackUnregistered() {}
+        }
+        synchronized(serviceInfoCallbacks) {
+            serviceInfoCallbacks[serviceInfo] = callback
+        }
+        nsdManager.registerServiceInfoCallback(serviceInfo, mainExecutor, callback)
+    }
+
+    /** 仅 API 29+ 调用。 */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun unregisterAllQ() {
         synchronized(serviceInfoCallbacks) {
             serviceInfoCallbacks.values.forEach { cb ->
-                try { nsdManager.unregisterServiceInfoCallback(cb) } catch (_: Exception) {}
+                try { nsdManager.unregisterServiceInfoCallback(cb as NsdManager.ServiceInfoCallback) } catch (_: Exception) {}
             }
             serviceInfoCallbacks.clear()
         }

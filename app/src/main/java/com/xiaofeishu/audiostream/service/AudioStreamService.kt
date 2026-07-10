@@ -321,7 +321,11 @@ class AudioStreamService : Service() {
     }
 
     private fun manageLocks(state: ConnectionState) {
-        if (state == ConnectionState.PLAYING || state == ConnectionState.CONNECTING) {
+        // 只要会话处于活跃态（连接中/已握手/播放中）就持续持锁。
+        // 旧逻辑仅在 PLAYING/CONNECTING 持锁，会在 CONNECTED（握手后到首帧音频之间的瞬态）
+        // 释放 wifiLock/wakeLock；锁屏后首帧因网络限流延迟到达时，这个窗口会被拉长，
+        // WiFi 随之休眠 → 服务端读超时断连。CONNECTED 是即将播放的活跃态，不该丢锁。
+        if (state.isActive) {
             acquireWakeLock()
             acquireWifiLock()
         } else {
@@ -357,6 +361,14 @@ class AudioStreamService : Service() {
                 setReferenceCounted(false)
                 acquire()
             }
+        }.onSuccess {
+            val modeName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) "LOW_LATENCY" else "HIGH_PERF"
+            android.util.Log.i("AudioStreamLock", "wifiLock acquired mode=$modeName held=${wifiLock?.isHeld == true}")
+        }.onFailure { e ->
+            // 旧逻辑 runCatching 静默吞掉失败：wifiLock 没真正拿到时无声，锁屏后 WiFi radio
+            // 照样休眠 → socket reset → onFailure EOFException。这里必须把失败暴露出来。
+            android.util.Log.e("AudioStreamLock", "wifiLock acquire FAILED", e)
+            wifiLock = null
         }
     }
 

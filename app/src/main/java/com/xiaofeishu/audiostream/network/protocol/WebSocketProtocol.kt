@@ -34,6 +34,9 @@ class WebSocketProtocol(
         val url = "ws://$address:$port/ws"
         val request = Request.Builder().url(url).build()
         val handshakeCompleted = AtomicBoolean(false)
+        // 帧计数：区分“reader 5 分钟没收到任何帧（socket 实际不通）”与“收到了文本/控制帧但无二进制音频帧（服务端没推音频流）”
+        var textFrames = 0
+        var binaryFrames = 0
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -44,6 +47,7 @@ class WebSocketProtocol(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                textFrames += 1
                 val format = AudioFormat.fromJson(text)
                 if (format != null) {
                     handshakeCompleted.set(true)
@@ -64,6 +68,7 @@ class WebSocketProtocol(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                binaryFrames += 1
                 // 音频数据用挂起 send：下游（AudioTrack.write）消费不过来时挂起回调线程，
                 // 把背压传导回网络读取，而不是 DROP_OLDEST 丢帧——长时间播放的卡顿/杂音
                 // 根因正是丢帧后码率塌陷+缓冲累积。OkHttp 单连接单回调线程被挂起=停读 socket，
@@ -72,18 +77,21 @@ class WebSocketProtocol(
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                android.util.Log.w("AudioStreamWS", "onClosing code=$code reason=$reason [文本帧=$textFrames 二进制帧=$binaryFrames]")
                 webSocket.close(1000, null)
                 _isConnected = false
                 trySend(AudioEvent.Disconnected(reason))
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                android.util.Log.w("AudioStreamWS", "onClosed code=$code reason=$reason [文本帧=$textFrames 二进制帧=$binaryFrames]")
                 _isConnected = false
                 trySend(AudioEvent.Disconnected(reason))
                 close()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                android.util.Log.w("AudioStreamWS", "onFailure [文本帧=$textFrames 二进制帧=$binaryFrames]", t)
                 _isConnected = false
                 trySend(AudioEvent.Error(t))
                 close()
