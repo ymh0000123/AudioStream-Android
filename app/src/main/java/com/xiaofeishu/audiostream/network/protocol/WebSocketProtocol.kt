@@ -153,8 +153,11 @@ class WebSocketProtocol(
 
     companion object {
         private const val HANDSHAKE_TIMEOUT_MS = 10_000L
-        /** Flow 内部 Channel 容量：仅用于平滑短时抖动。下游 AudioTrack.write 消费不过来时
-         * 用 SUSPEND 挂起 OkHttp 回调线程做背压，绝不丢帧（DROP_OLDEST 是长播卡顿根因）。 */
-        private const val FLOW_BUFFER_CAPACITY = 64
+        /**
+         * Flow 内部 Channel 容量：仅用于平滑短时调度抖动（~180ms）。
+         * 下游 AudioTrack.write 消费不过来时用 SUSPEND 挂起 OkHttp 回调线程做背压，绝不丢帧。
+         * 旧值 64 在恢复后会产生 ~1.5s 积压，8 帧足够平滑抖动且积压可忽略。
+         */
+        private const val FLOW_BUFFER_CAPACITY = 8
     }
 }

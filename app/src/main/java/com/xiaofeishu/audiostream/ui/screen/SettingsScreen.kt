@@ -32,13 +32,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.R
+import com.xiaofeishu.audiostream.ui.component.SteppedSlider
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
+
+/** 播放延迟固定档位（ms 阈值）：0=关闭跳帧。 */
+private val LATENCY_MODES = listOf(0, 100, 150, 200)
 
 @Composable
 fun SettingsScreen(viewModel: HomeViewModel = hiltViewModel()) {
     val savedServers by viewModel.savedServers.collectAsState()
     var showClearConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val latencyMode by viewModel.latencyMode.collectAsState()
 
     // 电池优化豁免状态
     var batteryIgnored by remember { mutableStateOf(checkBatteryIgnored(context)) }
@@ -88,6 +93,31 @@ fun SettingsScreen(viewModel: HomeViewModel = hiltViewModel()) {
                         Text(context.getString(R.string.battery_optimization_request))
                     }
                 }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 播放延迟模式
+        ListItem(
+            headlineContent = { Text(context.getString(R.string.latency_mode)) },
+            supportingContent = {
+                SteppedSlider(
+                    values = LATENCY_MODES,
+                    currentValue = latencyMode,
+                    onValueCommitted = viewModel::saveLatencyMode,
+                    valueLabel = { mode ->
+                        when (mode) {
+                            100 -> context.getString(R.string.latency_mode_low)
+                            150 -> context.getString(R.string.latency_mode_balanced)
+                            200 -> context.getString(R.string.latency_mode_stable)
+                            else -> context.getString(R.string.latency_mode_disabled)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                )
             }
         )
 

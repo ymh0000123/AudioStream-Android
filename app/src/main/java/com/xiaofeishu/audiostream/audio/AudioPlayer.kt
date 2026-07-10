@@ -47,49 +47,37 @@ class AudioPlayer(
     fun play(pcmData: ByteArray) {
         if (!_isPlaying) return
         recoverLongRunningTrackIfNeeded()
-        var offset = 0
-        var zeroWriteCount = 0
-        while (offset < pcmData.size) {
-            val track = currentOrRecoveredTrack() ?: return
-            val written = try {
-                track.write(pcmData, offset, pcmData.size - offset)
-            } catch (_: IllegalStateException) {
-                if (recoverTrack()) continue else return
-            }
-            when {
-                written > 0 -> {
-                    offset += written
-                    totalWrittenBytes += written
-                    zeroWriteCount = 0
-                }
-                written == 0 -> {
-                    zeroWriteCount += 1
-                    if (zeroWriteCount >= MAX_ZERO_WRITES) {
-                        if (recoverTrack()) {
-                            zeroWriteCount = 0
-                        } else {
-                            break
-                        }
-                    } else {
-                        Thread.sleep(WRITE_RETRY_DELAY_MS)
-                    }
-                }
-                else -> {
-                    if (isRecoverableWriteError(written) && recoverTrack()) {
-                        zeroWriteCount = 0
-                    } else {
-                        writeErrorListener?.onWriteError(written, track)
-                        break
-                    }
-                }
+        writeLoop(pcmData)
+    }
+
+    /**
+     * 写入音频数据，当缓冲积压超过 catchupThresholdMs 时跳过旧数据追赶。
+     * catchupThresholdMs=0 时禁用跳帧，等同于原 play()。
+     */
+    fun playWithCatchup(pcmData: ByteArray, format: com.xiaofeishu.audiostream.domain.model.AudioFormat, catchupThresholdMs: Int) {
+        if (!_isPlaying || catchupThresholdMs <= 0) {
+            play(pcmData)
+            return
+        }
+        recoverLongRunningTrackIfNeeded()
+
+        val headFrames = playbackHeadPositionFrames()
+        val writtenFrames = totalWrittenBytes / format.bytesPerFrame
+        val bufferedMs = ((writtenFrames - headFrames) * 1000 / format.sampleRate).toInt()
+
+        if (bufferedMs > catchupThresholdMs && pcmData.size >= format.bytesPerFrame) {
+            val framesToSkip = ((bufferedMs - catchupThresholdMs) * format.sampleRate / 1000).toInt()
+            val bytesToSkip = (framesToSkip * format.bytesPerFrame)
+                .coerceAtMost(pcmData.size - format.bytesPerFrame)
+                .let { it - (it % format.bytesPerFrame) }
+            if (bytesToSkip > 0) {
+                totalWrittenBytes += bytesToSkip
+                val remaining = pcmData.copyOfRange(bytesToSkip, pcmData.size)
+                writeLoop(remaining)
+                return
             }
         }
-        if (offset > 0) {
-            try {
-                audioTrack?.play()
-            } catch (_: IllegalStateException) {}
-            recoverStalledPlaybackIfNeeded()
-        }
+        writeLoop(pcmData)
     }
 
     fun start() {
@@ -183,9 +171,10 @@ class AudioPlayer(
             channelConfig,
             encoding
         )
-        // 低延迟优先：取系统建议下限，仅在不低于 100ms 的安全下限时使用，避免缓冲过小
-        // 导致 AudioTrack 频繁写满阻塞。旧的 1 秒下限会造成约 1 秒端到端延迟。
-        val safeFloorBytes = (format.sampleRate * format.bytesPerFrame * 100L / 1000).toInt()
+        // 低延迟优先：取系统建议下限，仅在不低于 20ms 的安全下限时使用。
+        // 旧的 100ms 下限叠加 getMinBufferSize() 会在部分设备产生 200-400ms 延迟，
+        // 20ms 足以覆盖大多数设备最小缓冲需求，配合 PERFORMANCE_MODE_LOW_LATENCY 生效。
+        val safeFloorBytes = (format.sampleRate * format.bytesPerFrame * 20L / 1000).toInt()
             .coerceAtLeast(1)
         val bufferSize = minBufferSize.coerceAtLeast(safeFloorBytes)
 
@@ -262,6 +251,52 @@ class AudioPlayer(
     private fun isRecoverableWriteError(errorCode: Int): Boolean {
         return errorCode == AudioTrack.ERROR_DEAD_OBJECT ||
             errorCode == AudioTrack.ERROR_INVALID_OPERATION
+    }
+
+    private fun writeLoop(pcmData: ByteArray) {
+        var offset = 0
+        var zeroWriteCount = 0
+        while (offset < pcmData.size) {
+            val track = currentOrRecoveredTrack() ?: return
+            val written = try {
+                track.write(pcmData, offset, pcmData.size - offset)
+            } catch (_: IllegalStateException) {
+                if (recoverTrack()) continue else return
+            }
+            when {
+                written > 0 -> {
+                    offset += written
+                    totalWrittenBytes += written
+                    zeroWriteCount = 0
+                }
+                written == 0 -> {
+                    zeroWriteCount += 1
+                    if (zeroWriteCount >= MAX_ZERO_WRITES) {
+                        if (recoverTrack()) {
+                            zeroWriteCount = 0
+                        } else {
+                            break
+                        }
+                    } else {
+                        Thread.sleep(WRITE_RETRY_DELAY_MS)
+                    }
+                }
+                else -> {
+                    if (isRecoverableWriteError(written) && recoverTrack()) {
+                        zeroWriteCount = 0
+                    } else {
+                        writeErrorListener?.onWriteError(written, track)
+                        break
+                    }
+                }
+            }
+        }
+        if (offset > 0) {
+            try {
+                audioTrack?.play()
+            } catch (_: IllegalStateException) {}
+            recoverStalledPlaybackIfNeeded()
+        }
     }
 
     private fun currentOrRecoveredTrack(): AudioTrack? {

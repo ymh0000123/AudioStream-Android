@@ -65,4 +65,9 @@
     <string name="battery_optimization_desc">忽略电池优化，防止系统在后台杀死播放服务</string>
     <string name="battery_optimization_granted">已授权</string>
     <string name="battery_optimization_request">点击授权</string>
+    <string name="latency_mode">播放延迟</string>
+    <string name="latency_mode_low">低延迟 (100ms)</string>
+    <string name="latency_mode_balanced">平衡 (150ms)</string>
+    <string name="latency_mode_stable">稳定 (200ms)</string>
+    <string name="latency_mode_disabled">关闭跳帧</string>
 </resources>

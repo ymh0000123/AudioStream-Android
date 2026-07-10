@@ -20,6 +20,9 @@ interface SettingsRepository {
     /** 目标码率（kbps）。 */
     val targetBitrate: StateFlow<Int>
 
+    /** 播放延迟模式：0=禁用跳帧，100=低延迟，150=平衡，200=稳定。 */
+    val latencyMode: StateFlow<Int>
+
     /** 默认协议偏好。 */
     val preferredProtocol: Flow<Protocol>
 
@@ -33,6 +36,7 @@ interface SettingsRepository {
     suspend fun saveAutoReconnect(enabled: Boolean)
     suspend fun loadTargetBitrate(): Int
     suspend fun saveTargetBitrate(bitrate: Int)
+    suspend fun saveLatencyMode(mode: Int)
     suspend fun savePreferredProtocol(protocol: Protocol)
     suspend fun addConnection(record: ConnectionRecord)
     suspend fun clearHistory()

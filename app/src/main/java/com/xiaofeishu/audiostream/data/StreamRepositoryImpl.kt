@@ -224,11 +224,17 @@ class StreamRepositoryImpl @Inject constructor(
         audioFramesReceived += 1
         val player = currentPlayer ?: return
         if (localPlaybackAllowed) {
+            val threshold = settingsRepository.latencyMode.value
             // AudioTrack.write 是阻塞调用，独占播放线程，避免与 Default 调度器上的
             // 状态/flow 逻辑抢线程导致调度抖动 → 背压 → 丢帧（长播卡顿根因）。
             withContext(playbackDispatcher) {
                 if (!player.isPlaying) player.resume()
-                player.play(event.data)
+                val format = _state.value.audioFormat
+                if (format != null && threshold > 0) {
+                    player.playWithCatchup(event.data, format, threshold)
+                } else {
+                    player.play(event.data)
+                }
             }
         }
         val now = System.currentTimeMillis()

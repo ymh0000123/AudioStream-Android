@@ -64,6 +64,13 @@ class HomeViewModel @Inject constructor(
             initialValue = Protocol.WEBSOCKET
         )
 
+    val latencyMode: StateFlow<Int> = settingsRepository.latencyMode
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 150
+        )
+
     fun startScan() = discoveryRepository.startScan()
     fun stopScan() = discoveryRepository.stopScan()
 
@@ -87,6 +94,10 @@ class HomeViewModel @Inject constructor(
 
     fun savePreferredProtocol(protocol: Protocol) {
         viewModelScope.launch { settingsRepository.savePreferredProtocol(protocol) }
+    }
+
+    fun saveLatencyMode(mode: Int) {
+        viewModelScope.launch { settingsRepository.saveLatencyMode(mode) }
     }
 
     fun clearHistory() {

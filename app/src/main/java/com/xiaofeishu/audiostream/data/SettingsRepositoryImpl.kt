@@ -28,6 +28,7 @@ private val KEY_AUTO_RECONNECT = booleanPreferencesKey("auto_reconnect_bool")
 private val KEY_AUTO_RECONNECT_LEGACY = stringPreferencesKey("auto_reconnect") // 旧 "true"/"false"
 private val KEY_PROTOCOL = stringPreferencesKey("protocol")
 private val KEY_TARGET_BITRATE = intPreferencesKey("target_bitrate")
+private val KEY_LATENCY_MODE = intPreferencesKey("latency_mode")
 
 /**
  * 持久化设置仓库实现。
@@ -57,6 +58,10 @@ class SettingsRepositoryImpl @Inject constructor(
         .map { prefs -> readTargetBitrate(prefs) }
         .stateIn(appScope, SharingStarted.Eagerly, DEFAULT_TARGET_BITRATE)
 
+    override val latencyMode: StateFlow<Int> = dataStore.data
+        .map { prefs -> prefs[KEY_LATENCY_MODE] ?: DEFAULT_LATENCY_MODE }
+        .stateIn(appScope, SharingStarted.Eagerly, DEFAULT_LATENCY_MODE)
+
     override val preferredProtocol: Flow<Protocol> = dataStore.data
         .map { prefs -> Protocol.fromWire(prefs[KEY_PROTOCOL]) }
 
@@ -85,6 +90,12 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun saveTargetBitrate(bitrate: Int) {
         dataStore.edit { prefs ->
             prefs[KEY_TARGET_BITRATE] = normalizeTargetBitrate(bitrate)
+        }
+    }
+
+    override suspend fun saveLatencyMode(mode: Int) {
+        dataStore.edit { prefs ->
+            prefs[KEY_LATENCY_MODE] = mode
         }
     }
 
@@ -132,5 +143,6 @@ class SettingsRepositoryImpl @Inject constructor(
 
     companion object {
         private const val DEFAULT_TARGET_BITRATE = 1536
+        private const val DEFAULT_LATENCY_MODE = 150
     }
 }

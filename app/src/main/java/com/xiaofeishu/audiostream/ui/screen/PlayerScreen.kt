@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -21,7 +19,6 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,10 +45,13 @@ import com.xiaofeishu.audiostream.domain.model.MediaAction
 import com.xiaofeishu.audiostream.ui.component.ConnectionStatus
 import com.xiaofeishu.audiostream.ui.component.QualityIndicator
 import com.xiaofeishu.audiostream.ui.component.StatsBar
+import com.xiaofeishu.audiostream.ui.component.SteppedSlider
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalLayoutApi::class)
+/** 码率固定档位（kbps），从低到高。 */
+private val BITRATE_PRESETS = listOf(64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072)
+
 @Composable
 fun PlayerScreen(
     viewModel: PlayerViewModel = hiltViewModel()
@@ -234,19 +234,13 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(4.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            val presets = listOf(3072, 2048, 1536, 1024, 768, 512, 384, 256, 192, 128, 96, 64)
-            presets.forEach { preset ->
-                FilterChip(
-                    selected = state.currentBitrate == preset,
-                    onClick = { viewModel.setBitrate(preset) },
-                    label = { Text("${preset}k") }
-                )
-            }
-        }
+        SteppedSlider(
+            values = BITRATE_PRESETS,
+            currentValue = state.currentBitrate,
+            onValueCommitted = viewModel::setBitrate,
+            valueLabel = { "$it kbps" },
+            modifier = Modifier.fillMaxWidth()
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
