@@ -68,9 +68,9 @@ Artifact path · 产物路径:`app/build/outputs/apk/<debug|release>/*.apk`
 
 ### 🔑 Signing · 签名
 
-The signing keystore is **not** checked into the repository. `build.ps1` / `build.bat` will automatically generate `xiaofeishu.keystore` on first build via `keytool` if it is missing. Signing credentials are read from `local.properties` (git-ignored) and fall back to defaults baked into the build scripts when absent.
+The signing keystore is **not** checked into the repository. `build.ps1` / `build.bat` will automatically generate `xiaofeishu.keystore` on first build via `keytool` if it is missing. Signing credentials are read from environment variables or `local.properties` (git-ignored): `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`.
 
-签名密钥**不纳入仓库**,首次构建时 `build.ps1` / `build.bat` 会通过 `keytool` 自动生成 `xiaofeishu.keystore`。签名口令从 `local.properties`(已被 git 忽略)读取,缺失时回退到构建脚本内置的默认值。
+签名密钥**不纳入仓库**,首次构建时 `build.ps1` / `build.bat` 会通过 `keytool` 自动生成 `xiaofeishu.keystore`。签名口令从环境变量或 `local.properties`(已被 git 忽略)读取:`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。
 
 ---
 

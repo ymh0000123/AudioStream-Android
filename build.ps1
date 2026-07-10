@@ -41,24 +41,55 @@ if (-not $env:ANDROID_HOME -and -not $env:ANDROID_SDK_ROOT) {
 # 进入项目目录
 Set-Location $PSScriptRoot
 
+function Read-LocalProperties {
+    $props = @{}
+    $path = Join-Path $PSScriptRoot "local.properties"
+    if (-not (Test-Path $path)) {
+        return $props
+    }
+
+    Get-Content $path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#")) {
+            $parts = $line -split "=", 2
+            if ($parts.Count -eq 2) {
+                $props[$parts[0].Trim()] = $parts[1].Trim()
+            }
+        }
+    }
+
+    return $props
+}
+
+$localProps = Read-LocalProperties
+$keystorePath = "xiaofeishu.keystore"
+$keyAlias = if ($env:KEY_ALIAS) { $env:KEY_ALIAS } elseif ($localProps["KEY_ALIAS"]) { $localProps["KEY_ALIAS"] } else { "xiaofeishu" }
+$keystorePassword = if ($env:KEYSTORE_PASSWORD) { $env:KEYSTORE_PASSWORD } else { $localProps["KEYSTORE_PASSWORD"] }
+$keyPassword = if ($env:KEY_PASSWORD) { $env:KEY_PASSWORD } elseif ($localProps["KEY_PASSWORD"]) { $localProps["KEY_PASSWORD"] } else { $keystorePassword }
+
+if (-not $keystorePassword) {
+    Write-Host "❌ 未设置 KEYSTORE_PASSWORD。请在环境变量或 local.properties 中配置签名密码。" -ForegroundColor Red
+    Pause-Exit 1
+}
+
 try {
 
 # 步骤 1: 生成签名密钥（如果不存在）
-$keystorePath = "xiaofeishu.keystore"
 if (-not (Test-Path $keystorePath)) {
     Write-Host "📦 正在生成签名密钥..." -ForegroundColor Green
 
     $keytoolArgs = @(
         "-genkeypair"
         "-v"
+        "-storetype", "PKCS12"
         "-keystore", $keystorePath
-        "-storepass", "xiaofeishu"
+        "-storepass", $keystorePassword
         "-keyalg", "RSA"
-        "-keysize", "2048"
-        "-validity", "10000"
-        "-alias", "xiaofeishu"
-        "-keypass", "xiaofeishu"
-        "-dname", "CN=XiaoFeiShu, OU=AudioStream, O=XiaoFeiShu, L=Beijing, ST=Beijing, C=CN"
+        "-keysize", "4096"
+        "-validity", "36500"
+        "-alias", $keyAlias
+        "-keypass", $keyPassword
+        "-dname", "CN=AudioStream Android, OU=AudioStream, O=XiaoFeiShu, L=Singapore, ST=Singapore, C=SG"
     )
 
     & keytool @keytoolArgs
@@ -119,7 +150,7 @@ Write-Host ""
 Write-Host "📋 包信息:" -ForegroundColor Yellow
 Write-Host "   包名: com.xiaofeishu.audiostream" -ForegroundColor White
 Write-Host "   签名: xiaofeishu.keystore" -ForegroundColor White
-Write-Host "   签名密码: xiaofeishu" -ForegroundColor White
+Write-Host "   签名别名: $keyAlias" -ForegroundColor White
 
 # 步骤 5: ADB 安装（默认执行，-NoInstall 跳过）
 if (-not $NoInstall) {

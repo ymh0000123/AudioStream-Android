@@ -44,9 +44,9 @@ AudioStream（小废鼠 AudioStream）是一个 Android 原生音频流播放客
 
 产物路径：`app/build/outputs/apk/<debug|release>/*.apk`
 
-**签名**：`xiaofeishu.keystore`（仓库根目录，**不入版本控制**，由 `build.ps1`/`build.bat` 在缺失时自动调用 `keytool` 生成）。release 的 `signingConfig` 从 `local.properties` 读取 `KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`，缺失时回退到脚本内置默认值 `xiaofeishu`——即口令不再硬编码进仓库。release 启用 `isMinifyEnabled = true`，混淆规则见 `app/proguard-rules.pro`。
+**签名**：`xiaofeishu.keystore`（仓库根目录，**不入版本控制**，由 `build.ps1`/`build.bat` 在缺失时自动调用 `keytool` 生成）。release 的 `signingConfig` 从环境变量或 `local.properties` 读取 `KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`；若 `KEY_PASSWORD` 缺失，则使用 `KEYSTORE_PASSWORD`。release 启用 `isMinifyEnabled = true`，混淆规则见 `app/proguard-rules.pro`。
 
-> ⚠️ 签名密钥与口令**不应**硬编码进仓库：keystore 已被 `.gitignore` 忽略，gradle 配置从 `local.properties`（也已忽略）读取。修改时注意：release 构建依赖该 keystore 存在，脚本会在缺失时自动生成。
+> ⚠️ 签名密钥与口令**不应**硬编码进仓库：keystore 已被 `.gitignore` 忽略，Gradle 与构建脚本从环境变量或 `local.properties`（也已忽略）读取。修改时注意：release 构建依赖该 keystore 存在，脚本会在缺失时自动生成。
 
 ## 架构
 

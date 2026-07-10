@@ -20,8 +20,8 @@ android {
         versionName = "1.0"
     }
 
-    // 签名口令从 local.properties 读取(不入仓库);缺失时回退占位,
-    // 由 build 脚本在首次构建时自动生成 keystore 并写入 local.properties。
+    // 签名口令从环境变量或 local.properties 读取(不入仓库)。
+    // build 脚本在首次构建时会按同一套配置自动生成 keystore。
     val localProps = Properties().apply {
         val f = rootProject.file("local.properties")
         if (f.exists()) f.inputStream().use { load(it) }
@@ -35,6 +35,8 @@ android {
                 ?: localProps.getProperty("KEY_ALIAS")
             keyPassword = System.getenv("KEY_PASSWORD")
                 ?: localProps.getProperty("KEY_PASSWORD")
+                ?: System.getenv("KEYSTORE_PASSWORD")
+                ?: localProps.getProperty("KEYSTORE_PASSWORD")
         }
     }
 

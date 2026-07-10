@@ -10,6 +10,21 @@ echo.
 REM 进入项目目录
 cd /d "%~dp0"
 
+REM 读取签名配置：环境变量优先，其次 local.properties
+if exist "local.properties" (
+    for /f "usebackq tokens=1,* delims==" %%a in ("local.properties") do (
+        if /i "%%a"=="KEYSTORE_PASSWORD" if not defined KEYSTORE_PASSWORD set "KEYSTORE_PASSWORD=%%b"
+        if /i "%%a"=="KEY_ALIAS" if not defined KEY_ALIAS set "KEY_ALIAS=%%b"
+        if /i "%%a"=="KEY_PASSWORD" if not defined KEY_PASSWORD set "KEY_PASSWORD=%%b"
+    )
+)
+if not defined KEY_ALIAS set "KEY_ALIAS=xiaofeishu"
+if not defined KEY_PASSWORD set "KEY_PASSWORD=%KEYSTORE_PASSWORD%"
+if not defined KEYSTORE_PASSWORD (
+    echo 未设置 KEYSTORE_PASSWORD。请在环境变量或 local.properties 中配置签名密码。
+    goto fail
+)
+
 REM 检查参数
 set BUILD_TYPE=release
 set DO_INSTALL=1
@@ -36,7 +51,7 @@ goto parse_args
 REM 生成签名密钥
 if not exist "xiaofeishu.keystore" (
     echo 正在生成签名密钥...
-    keytool -genkeypair -v -keystore xiaofeishu.keystore -storepass xiaofeishu -keyalg RSA -keysize 2048 -validity 10000 -alias xiaofeishu -keypass xiaofeishu -dname "CN=XiaoFeiShu, OU=AudioStream, O=XiaoFeiShu, L=Beijing, ST=Beijing, C=CN"
+    keytool -genkeypair -v -storetype PKCS12 -keystore xiaofeishu.keystore -storepass "!KEYSTORE_PASSWORD!" -keyalg RSA -keysize 4096 -validity 36500 -alias "!KEY_ALIAS!" -keypass "!KEY_PASSWORD!" -dname "CN=AudioStream Android, OU=AudioStream, O=XiaoFeiShu, L=Singapore, ST=Singapore, C=SG"
     if errorlevel 1 (
         echo 签名密钥生成失败
         goto fail
@@ -59,6 +74,7 @@ echo ============================================
 echo   编译完成!
 echo   包名: com.xiaofeishu.audiostream
 echo   签名: xiaofeishu.keystore
+echo   签名别名: !KEY_ALIAS!
 echo ============================================
 
 REM ADB 安装
