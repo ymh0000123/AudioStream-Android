@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.ref }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -68,12 +70,10 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           test -n "$KEYSTORE_BASE64" || (echo "Missing KEYSTORE_BASE64 secret" && exit 1)
           test -n "$KEYSTORE_PASSWORD" || (echo "Missing KEYSTORE_PASSWORD secret" && exit 1)
           test -n "$KEY_ALIAS" || (echo "Missing KEY_ALIAS secret" && exit 1)
-          test -n "$KEY_PASSWORD" || (echo "Missing KEY_PASSWORD secret" && exit 1)
 
       - name: Validate manual release upload target
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
@@ -86,6 +86,44 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > xiaofeishu.keystore
           test -s xiaofeishu.keystore
 
+      - name: Validate release keystore
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          keytool -list \
+            -keystore xiaofeishu.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            >/dev/null
+
+          validate_key_password() {
+            keytool -certreq \
+              -keystore xiaofeishu.keystore \
+              -storepass "$KEYSTORE_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keypass "$1" \
+              -file /tmp/release-key.csr \
+              >/dev/null 2>&1
+          }
+
+          if [ -n "$KEY_PASSWORD" ] && validate_key_password "$KEY_PASSWORD"; then
+            selected_key_password="$KEY_PASSWORD"
+          elif validate_key_password "$KEYSTORE_PASSWORD"; then
+            echo "KEY_PASSWORD did not unlock the signing key; using KEYSTORE_PASSWORD instead."
+            selected_key_password="$KEYSTORE_PASSWORD"
+          else
+            echo "Unable to unlock signing key. Update KEY_PASSWORD to the key password for KEY_ALIAS."
+            exit 1
+          fi
+
+          {
+            echo "KEY_PASSWORD<<EOF"
+            echo "$selected_key_password"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
@@ -93,7 +131,6 @@ jobs:
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew clean assembleRelease --no-daemon --no-configuration-cache --stacktrace
 
       - name: Collect release APK
