@@ -3,9 +3,6 @@ name: Build Release APK
 on:
   release:
     types: [published]
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       upload_to_release:
@@ -148,7 +145,7 @@ jobs:
           retention-days: 30
 
       - name: Upload APK to GitHub Release
-        if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release }}
+        if: ${{ github.event_name == 'release' || inputs.upload_to_release }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.tag_name || github.ref_name }}
