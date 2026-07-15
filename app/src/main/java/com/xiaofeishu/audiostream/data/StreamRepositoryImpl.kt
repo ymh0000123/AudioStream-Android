@@ -68,6 +68,7 @@ class StreamRepositoryImpl @Inject constructor(
     @Volatile private var activeProtocol: AudioProtocol? = null
     @Volatile private var localPlaybackAllowed = true
     @Volatile private var lastAudioDataAtMs = 0L
+    @Volatile private var lastServerActivityAtMs = 0L
     @Volatile private var sessionStartedAtMs = 0L
     @Volatile private var audioFramesReceived = 0L
     @Volatile private var currentServer: ServerInfo? = null
@@ -99,6 +100,7 @@ class StreamRepositoryImpl @Inject constructor(
         manualDisconnect = false
         localPlaybackAllowed = true
         lastAudioDataAtMs = 0L
+        lastServerActivityAtMs = 0L
         _state.value = _state.value.copy(
             connectionState = ConnectionState.CONNECTING,
             server = server,
@@ -143,8 +145,8 @@ class StreamRepositoryImpl @Inject constructor(
                     when (event) {
                         is AudioEvent.Connected -> onConnected(server, event)
                         is AudioEvent.AudioData -> onAudioData(event)
-                        is AudioEvent.Disconnected -> onDisconnected(server, event.reason, attempt)
-                        is AudioEvent.Error -> onError(server, event.exception, attempt)
+                        is AudioEvent.Disconnected -> onDisconnected(server, event.reason)
+                        is AudioEvent.Error -> onError(server, event.exception)
                         is AudioEvent.StateUpdate -> onStateUpdate(event.state)
                         is AudioEvent.BitrateChanged -> onBitrateChanged(event)
                     }
@@ -156,7 +158,7 @@ class StreamRepositoryImpl @Inject constructor(
                 // 上屏，并触发第二次 maybeReconnect 与 watchdog 的重连竞态。
                 throw e
             } catch (e: Exception) {
-                onError(server, e, attempt)
+                onError(server, e)
             }
         }
     }
@@ -178,6 +180,12 @@ class StreamRepositoryImpl @Inject constructor(
         sessionStartedAtMs = System.currentTimeMillis()
         audioFramesReceived = 0L
         lastAudioDataAtMs = 0L  // 每个会话独立计时：重连会话不复用上次会话的音频时间戳
+        // 握手文本帧本身就是服务端活性证据，从连接成功起看门狗即有效
+        lastServerActivityAtMs = System.currentTimeMillis()
+        // 连接成功即恢复退避基数：currentAttempt 是 onDisconnected/onError/watchdog 断开时
+        // maybeReconnect 的起点。不清零的话历史重连次数会一直累积，退避永远停在 8s 封顶
+        // ——表现为每次看门狗断开后都要等满 8 秒才重连。
+        currentAttempt = 0
         _state.value = _state.value.copy(
             connectionState = ConnectionState.CONNECTED,
             audioFormat = event.format,
@@ -198,21 +206,25 @@ class StreamRepositoryImpl @Inject constructor(
     /**
      * 连接健康看门狗：锁屏后 WiFi 抖动会让 socket 失活，但 OkHttp reader 会一直阻塞在
      * socketRead 上（最长 30+ 秒才被 OS abort），这期间无声且无重连。看门狗每秒检查
-     * [lastAudioDataAtMs]，超过 [WATCHDOG_STALL_MS] 无音频即主动断开并立即重连，把无声从
-     * 30+ 秒压到 ~10 秒。仅当收到过音频（lastAudioDataAtMs>0）后启用，握手期间不误杀。
+     * [lastServerActivityAtMs]，超过 [WATCHDOG_STALL_MS] 未收到任何服务端消息即主动断开
+     * 并立即重连，把无声从 30+ 秒压到 ~10 秒。
+     *
+     * 判据必须是"任何服务端消息"而非"音频帧"：服务端静音期会跳过音频广播（省带宽），
+     * 但媒体状态轮询仍每 500ms 推送文本帧。只盯音频会把"桌面端暂停超过 10 秒"误判为
+     * 断线（静音误杀）；socket 真失活时文本流同样停止，压断死链的语义不变。
      */
     private fun startWatchdog() {
         watchdogJob?.cancel()
         watchdogJob = appScope.launch {
             while (true) {
                 delay(WATCHDOG_CHECK_MS)
-                val lastAudio = lastAudioDataAtMs
+                val lastActivity = lastServerActivityAtMs
                 // 仅在开启自动重连时主动断开重连：未开启时让连接维持原状（用户不想自动恢复）。
-                if (autoReconnectEnabled && lastAudio > 0 &&
-                    System.currentTimeMillis() - lastAudio > WATCHDOG_STALL_MS
+                if (autoReconnectEnabled && lastActivity > 0 &&
+                    System.currentTimeMillis() - lastActivity > WATCHDOG_STALL_MS
                 ) {
                     android.util.Log.w("AudioStreamWatchdog",
-                        "无音频 ${System.currentTimeMillis() - lastAudio}ms 超过 ${WATCHDOG_STALL_MS}ms，主动断开重连")
+                        "无服务端消息 ${System.currentTimeMillis() - lastActivity}ms 超过 ${WATCHDOG_STALL_MS}ms，主动断开重连 ${idleDiagnostic()}")
                     val server = currentServer ?: return@launch
                     val attempt = currentAttempt
                     // 取消 collectJob 触发 awaitClose 关闭 socket；collect 的 catch 分支会 rethrow
@@ -222,6 +234,7 @@ class StreamRepositoryImpl @Inject constructor(
                     teardownPlayer()
                     _state.value = _state.value.copy(
                         connectionState = ConnectionState.DISCONNECTED,
+                        error = "连接失活（${WATCHDOG_STALL_MS / 1000} 秒未收到服务端数据）",
                         mediaState = null
                     )
                     maybeReconnect(server, attempt)
@@ -236,6 +249,7 @@ class StreamRepositoryImpl @Inject constructor(
         val player = currentPlayer ?: return
         val now = System.currentTimeMillis()
         lastAudioDataAtMs = now
+        lastServerActivityAtMs = now
         bitrateTracker.add(event.data.size, now)
         if (localPlaybackAllowed) {
             enqueueAudio(event.data)
@@ -256,7 +270,10 @@ class StreamRepositoryImpl @Inject constructor(
         )
     }
 
-    private fun onDisconnected(server: ServerInfo, reason: String, attempt: Int) {
+    // 断开/出错的重连起点统一读 currentAttempt：onConnected 成功后会清零，
+    // 保证"连过再断"从 1s 退避起步；只有连续失败（onConnected 未执行）才递增退避。
+    // 不能用 startSession 闭包捕获的 attempt——它是本次会话发起时的历史值，不随成功清零。
+    private fun onDisconnected(server: ServerInfo, reason: String) {
         watchdogJob?.cancel()
         teardownPlayer()
         android.util.Log.w("AudioStreamRepo", "onDisconnected: $reason ${idleDiagnostic()}")
@@ -265,10 +282,10 @@ class StreamRepositoryImpl @Inject constructor(
             error = reason.ifBlank { "连接已断开" },
             mediaState = null
         )
-        maybeReconnect(server, attempt)
+        maybeReconnect(server, currentAttempt)
     }
 
-    private fun onError(server: ServerInfo, error: Throwable, attempt: Int) {
+    private fun onError(server: ServerInfo, error: Throwable) {
         watchdogJob?.cancel()
         teardownPlayer()
         val reason = error.message ?: error::class.java.simpleName
@@ -278,17 +295,19 @@ class StreamRepositoryImpl @Inject constructor(
             error = reason,
             mediaState = null
         )
-        maybeReconnect(server, attempt)
+        maybeReconnect(server, currentAttempt)
     }
 
-    /** 断连诊断：会话已存活多久 + 距上次收到音频多久 + 本会话收到的音频帧数。区分
+    /** 断连诊断：会话已存活多久 + 距上次收到音频/任意消息多久 + 本会话收到的音频帧数。区分
      *  服务端读空闲超时（idle 大）、服务端在正常推流中突然裸关连接（idle≈0，frames>0）、
+     *  静音期看门狗（距音频大但距消息小=误杀，两者都大=真死链）、
      *  与握手成功后从未收到音频（frames=0 → onConnected 后无 AudioData，疑似 player 异常）。 */
     private fun idleDiagnostic(): String {
         val now = System.currentTimeMillis()
         val sessionMs = if (sessionStartedAtMs > 0) now - sessionStartedAtMs else -1
         val idleMs = if (lastAudioDataAtMs > 0) now - lastAudioDataAtMs else -1
-        return "[会话 ${sessionMs}ms, 距上次音频 ${idleMs}ms, 收到音频帧 ${audioFramesReceived}]"
+        val activityMs = if (lastServerActivityAtMs > 0) now - lastServerActivityAtMs else -1
+        return "[会话 ${sessionMs}ms, 距上次音频 ${idleMs}ms, 距上次消息 ${activityMs}ms, 收到音频帧 ${audioFramesReceived}]"
     }
 
     private fun maybeReconnect(server: ServerInfo, attempt: Int) {
@@ -319,6 +338,7 @@ class StreamRepositoryImpl @Inject constructor(
         manualDisconnect = true
         localPlaybackAllowed = true
         lastAudioDataAtMs = 0L
+        lastServerActivityAtMs = 0L
         watchdogJob?.cancel()
         reconnectJob?.cancel()
         collectJob?.cancel()
@@ -380,6 +400,7 @@ class StreamRepositoryImpl @Inject constructor(
     }
 
     private suspend fun onBitrateChanged(event: AudioEvent.BitrateChanged) {
+        lastServerActivityAtMs = System.currentTimeMillis()
         val player = currentPlayer
         // 是否续播只看本地播放闸门：服务端"暂停"元数据与 player.isPlaying 瞬时值都不可靠
         val shouldPlay = localPlaybackAllowed
@@ -414,6 +435,7 @@ class StreamRepositoryImpl @Inject constructor(
         a.sampleRate == b.sampleRate && a.channels == b.channels && a.bitsPerSample == b.bitsPerSample
 
     private fun onStateUpdate(mediaState: MediaState) {
+        lastServerActivityAtMs = System.currentTimeMillis()
         if (mediaState.playing) {
             localPlaybackAllowed = true
         }
@@ -455,18 +477,16 @@ class StreamRepositoryImpl @Inject constructor(
     ) {
         stopPlaybackQueue()
         val latencyMode = settingsRepository.latencyMode.value
-        val dropsOldest = latencyMode > 0
         val queuedBytes = AtomicLong(0L)
+        // 所有档位统一 DROP_OLDEST：旧逻辑"禁用"档用 SUSPEND 反压，播放端一慢就把
+        // OkHttp reader 挂起，积压全部转移进 TCP 收发缓冲（几百 KB ≈ 秒级延迟），
+        // 只增不减且对 stats 不可见。改为本地大队列丢最旧兜底，延迟有界且可观测。
         val queue = Channel<ByteArray>(
             capacity = audioQueueCapacity(latencyMode),
-            onBufferOverflow = if (dropsOldest) {
-                BufferOverflow.DROP_OLDEST
-            } else {
-                BufferOverflow.SUSPEND
-            },
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
             onUndeliveredElement = { data -> removeQueuedAudio(queuedBytes, data) }
         )
-        playbackQueue = PlaybackQueue(queue, queuedBytes, dropsOldest)
+        playbackQueue = PlaybackQueue(queue, queuedBytes)
         playbackJob = appScope.launch(playbackDispatcher) {
             try {
                 for (data in queue) {
@@ -475,7 +495,9 @@ class StreamRepositoryImpl @Inject constructor(
                         if (!player.isPlaying) player.resume()
                         val threshold = settingsRepository.latencyMode.value
                         if (threshold > 0) {
-                            player.playWithCatchup(data, format, threshold)
+                            // 本包已出队，queuedBytes 里扣除本包后即"仍排在后面"的积压
+                            val pendingBytes = (queuedBytes.get() - data.size).coerceAtLeast(0L)
+                            player.playWithCatchup(data, format, threshold, pendingBytes)
                         } else {
                             player.play(data)
                         }
@@ -488,24 +510,19 @@ class StreamRepositoryImpl @Inject constructor(
             } catch (e: Exception) {
                 if (playbackQueue?.channel !== queue) return@launch
                 val server = currentServer ?: return@launch
-                val attempt = currentAttempt
                 appScope.launch {
                     collectJob?.cancel()
-                    onError(server, e, attempt)
+                    onError(server, e)
                 }
             }
         }
     }
 
-    private suspend fun enqueueAudio(data: ByteArray) {
+    private fun enqueueAudio(data: ByteArray) {
         val queue = playbackQueue ?: return
         queue.queuedBytes.addAndGet(data.size.toLong())
-        if (queue.dropsOldest) {
-            if (queue.channel.trySend(data).isFailure) {
-                removeQueuedAudio(queue.queuedBytes, data)
-            }
-        } else {
-            queue.channel.send(data)
+        if (queue.channel.trySend(data).isFailure) {
+            removeQueuedAudio(queue.queuedBytes, data)
         }
     }
 
@@ -545,13 +562,27 @@ class StreamRepositoryImpl @Inject constructor(
                 .coerceAtMost(Int.MAX_VALUE.toLong())
                 .toInt()
         } else 0
+        // 评级相对所选延迟档位：档位值本身就是目标稳态延迟，
+        // 固定阈值会把 150/200 档的正常稳态误评为"一般"。
+        val threshold = settingsRepository.latencyMode.value
+        val fairAbove = if (threshold > 0) threshold + 100 else 250
+        val poorAbove = if (threshold > 0) threshold + 350 else 600
         val quality = when {
             bitrateKbps <= 0 -> Quality.UNKNOWN
-            bufferLatencyMs > 500 -> Quality.POOR
-            bufferLatencyMs > 150 -> Quality.FAIR
+            bufferLatencyMs > poorAbove -> Quality.POOR
+            bufferLatencyMs > fairAbove -> Quality.FAIR
             else -> Quality.GOOD
         }
-        return StreamStats(bitrateKbps, bufferLatencyMs, quality)
+        // 输出链路信息（AudioPlayer 内部按 ~2s 节流，此处每包调用无额外开销）：
+        // 链路延迟是编解码/传输固有，不参与 quality 评级——app 无法通过跳帧消除它。
+        val link = player?.outputLinkInfo()
+        return StreamStats(
+            bitrateKbps = bitrateKbps,
+            bufferLatencyMs = bufferLatencyMs,
+            quality = quality,
+            sinkLatencyMs = link?.sinkLatencyMs,
+            bluetoothDevice = link?.takeIf { it.isBluetooth }?.deviceName
+        )
     }
 
     /** ~1 秒滑动窗口码率跟踪。 */
@@ -578,8 +609,7 @@ class StreamRepositoryImpl @Inject constructor(
 
     private data class PlaybackQueue(
         val channel: Channel<ByteArray>,
-        val queuedBytes: AtomicLong,
-        val dropsOldest: Boolean
+        val queuedBytes: AtomicLong
     )
 
     companion object {
@@ -595,11 +625,14 @@ class StreamRepositoryImpl @Inject constructor(
         private const val WATCHDOG_STALL_MS = 10_000L
         private const val WATCHDOG_CHECK_MS = 1_000L
 
+        /** 播放队列容量（包，每包 20ms）。100/150/200 档配合跳帧追赶取小容量；
+         *  0（禁用跳帧）档不主动追赶，用大容量降低丢帧概率，仅在积压超 ~480ms 时
+         *  丢最旧兜底，防止延迟无界累积。 */
         private fun audioQueueCapacity(latencyMode: Int): Int = when (latencyMode) {
             100 -> 2
             150 -> 4
             200 -> 6
-            else -> 8
+            else -> 24
         }
 
         private fun normalizeTargetBitrate(bitrate: Int): Int {

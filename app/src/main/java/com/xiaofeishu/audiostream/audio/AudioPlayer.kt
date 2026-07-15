@@ -1,7 +1,9 @@
 package com.xiaofeishu.audiostream.audio
 
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat as AndroidAudioFormat
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.os.Build
 import android.os.SystemClock
@@ -14,6 +16,13 @@ class AudioPlayer(
     fun interface WriteErrorListener {
         fun onWriteError(errorCode: Int, audioTrack: AudioTrack)
     }
+
+    /** 输出链路信息：实际路由的输出设备与链路在途延迟估计。 */
+    data class OutputLinkInfo(
+        val isBluetooth: Boolean,
+        val deviceName: String,
+        val sinkLatencyMs: Int?
+    )
 
     var writeErrorListener: WriteErrorListener? = null
 
@@ -30,6 +39,8 @@ class AudioPlayer(
     private var lastObservedWrittenBytes: Long = 0L
     private var lastObservedAtMs: Long = 0L
     private var playbackHeadStallStartedAtMs: Long = 0L
+    @Volatile private var cachedLinkInfo: OutputLinkInfo? = null
+    @Volatile private var linkInfoCheckedAtMs: Long = 0L
     @Volatile var totalWrittenBytes: Long = 0L
         private set
 
@@ -56,8 +67,17 @@ class AudioPlayer(
     /**
      * 写入音频数据，当缓冲积压超过 catchupThresholdMs 时跳过旧数据追赶。
      * catchupThresholdMs=0 时禁用跳帧，等同于原 play()。
+     *
+     * [pendingBacklogBytes] 是播放队列中尚未写入 track 的积压字节，必须计入总积压：
+     * 多数设备 AudioTrack 最小缓冲不足 150ms，只看 written-head 时阈值永远够不着，
+     * 队列积压（最多几十至几百 ms）会永久叠加在延迟上、无法被追赶收敛。
      */
-    fun playWithCatchup(pcmData: ByteArray, format: com.xiaofeishu.audiostream.domain.model.AudioFormat, catchupThresholdMs: Int) {
+    fun playWithCatchup(
+        pcmData: ByteArray,
+        format: com.xiaofeishu.audiostream.domain.model.AudioFormat,
+        catchupThresholdMs: Int,
+        pendingBacklogBytes: Long = 0L
+    ) {
         if (!_isPlaying || catchupThresholdMs <= 0) {
             play(pcmData)
             return
@@ -66,7 +86,8 @@ class AudioPlayer(
 
         val headFrames = playbackHeadPositionFrames()
         val writtenFrames = totalWrittenBytes / format.bytesPerFrame
-        val bufferedMs = ((writtenFrames - headFrames) * 1000 / format.sampleRate).toInt()
+        val backlogFrames = pendingBacklogBytes.coerceAtLeast(0L) / format.bytesPerFrame
+        val bufferedMs = ((writtenFrames - headFrames + backlogFrames) * 1000 / format.sampleRate).toInt()
 
         if (bufferedMs > catchupThresholdMs && pcmData.size >= format.bytesPerFrame) {
             val framesToSkip = ((bufferedMs - catchupThresholdMs) * format.sampleRate / 1000).toInt()
@@ -101,9 +122,10 @@ class AudioPlayer(
     fun pause() {
         if (!_isPlaying) return
         _isPlaying = false
-        try {
-            audioTrack?.pause()
-        } catch (_: IllegalStateException) {}
+        // 暂停即丢弃未播数据并释放 track：MODE_STREAM 下暂停时残留在缓冲里的 PCM
+        // 会在恢复时先播出（听到暂停前的声音），且 written-head 差值守恒，
+        // 此后整个会话的缓冲延迟都会多这一截。恢复时由 currentOrRecoveredTrack 惰性重建。
+        releaseTrack()
     }
 
     fun resume() {
@@ -138,6 +160,71 @@ class AudioPlayer(
     }
 
     fun currentStreamFormat(): StreamFormat? = currentFormat
+
+    /**
+     * 当前输出链路信息，约每 [LINK_INFO_REFRESH_MS] 刷新一次——getRoutedDevice/getTimestamp
+     * 都是 binder 调用，不宜跟着每个 20ms 音频包高频查询。track 不存在（已释放/本地暂停）时返回 null。
+     */
+    fun outputLinkInfo(): OutputLinkInfo? {
+        val now = SystemClock.elapsedRealtime()
+        if (now - linkInfoCheckedAtMs < LINK_INFO_REFRESH_MS) return cachedLinkInfo
+        linkInfoCheckedAtMs = now
+        val track = audioTrack
+        if (track == null) {
+            cachedLinkInfo = null
+            return null
+        }
+        val device = runCatching { track.routedDevice }.getOrNull()
+        val isBluetooth = when (device?.type) {
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_BLE_BROADCAST -> true
+            else -> false
+        }
+        val info = OutputLinkInfo(
+            isBluetooth = isBluetooth,
+            deviceName = device?.productName?.toString().orEmpty(),
+            sinkLatencyMs = estimateSinkLatencyMs(track)
+        )
+        cachedLinkInfo = info
+        return info
+    }
+
+    /**
+     * 估算链路在途延迟：已被系统从 track 缓冲取走、但尚未真正从耳机/扬声器发声的时长
+     * （系统混音 + 蓝牙编码/空中传输/耳机端解码缓冲）。这段延迟无法用跳帧消除，
+     * 单独测出来是为了把"app 内缓冲"和"系统/蓝牙链路"分开展示。
+     *
+     * 首选公开 API getTimestamp()：HAL 上报的 (framePosition, nanoTime) 呈现位置，
+     * 蓝牙 HAL 通常已把链路延迟估计计入；head 减去外推到当前时刻的 presented 即在途帧数。
+     * 部分设备蓝牙路由下时间戳不可用或跳变，回退隐藏 API getLatency()（Media3 同款做法），
+     * 其返回值包含整个 track 缓冲时长，需减去 bufferSizeInFrames 才是 sink 侧延迟。
+     * 两条路都不可用时返回 null（UI 显示为不可测）。
+     */
+    private fun estimateSinkLatencyMs(track: AudioTrack): Int? {
+        val format = currentFormat ?: return null
+        if (format.sampleRate <= 0) return null
+
+        val ts = AudioTimestamp()
+        val hasTimestamp = runCatching { track.getTimestamp(ts) }.getOrDefault(false)
+        if (hasTimestamp) {
+            val elapsedFrames =
+                (System.nanoTime() - ts.nanoTime) * format.sampleRate / 1_000_000_000L
+            val presentedFrames = ts.framePosition + elapsedFrames
+            val ms = ((playbackHeadPositionFrames() - presentedFrames) * 1000 / format.sampleRate).toInt()
+            // 外推抖动允许小幅为负；大幅为负或超出合理上限视为时间戳不可信，走 getLatency 兜底
+            if (ms in -50..MAX_SINK_LATENCY_MS) return ms.coerceAtLeast(0)
+        }
+
+        val totalLatencyMs = runCatching {
+            getLatencyMethod?.invoke(track) as? Int
+        }.getOrNull() ?: return null
+        val bufferMs = runCatching { track.bufferSizeInFrames }.getOrDefault(0)
+            .toLong() * 1000 / format.sampleRate
+        return (totalLatencyMs - bufferMs).toInt().coerceIn(0, MAX_SINK_LATENCY_MS)
+    }
 
     fun release() {
         released = true
@@ -343,6 +430,7 @@ class AudioPlayer(
         lastObservedWrittenBytes = 0L
         lastObservedAtMs = 0L
         playbackHeadStallStartedAtMs = 0L
+        linkInfoCheckedAtMs = 0L  // track 重建后路由/延迟可能变化，下次查询强制刷新
     }
 
     companion object {
@@ -354,5 +442,14 @@ class AudioPlayer(
         private const val MAX_TRACK_LIFETIME_MS = 2 * 60 * 60 * 1000L
         private const val PLAYBACK_HEAD_MASK = 0xffffffffL
         private const val PLAYBACK_HEAD_WRAP = 1L shl 32
+        private const val LINK_INFO_REFRESH_MS = 2_000L
+        /** 链路延迟合理上限：LDAC 弱信号下可到 ~1s，超出视为测量值不可信。 */
+        private const val MAX_SINK_LATENCY_MS = 2_000
+
+        /** 隐藏 API AudioTrack.getLatency()：返回 track 缓冲 + HAL + 外设链路总延迟（ms）。
+         *  greylist 可反射访问，Media3 AudioTrackPositionTracker 同样在用；失败返回 null。 */
+        private val getLatencyMethod by lazy {
+            runCatching { AudioTrack::class.java.getMethod("getLatency") }.getOrNull()
+        }
     }
 }
