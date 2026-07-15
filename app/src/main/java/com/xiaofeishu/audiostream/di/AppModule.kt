@@ -1,6 +1,7 @@
 package com.xiaofeishu.audiostream.di
 
 import android.content.Context
+import android.os.Process
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.google.gson.Gson
@@ -64,6 +65,9 @@ object AppModule {
     @PlaybackDispatcher
     fun providePlaybackDispatcher(): kotlinx.coroutines.ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor { r ->
-            Thread(r, "audio-write").apply { isDaemon = true }
+            Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+                r.run()
+            }, "audio-write").apply { isDaemon = true }
         }.asCoroutineDispatcher()
 }

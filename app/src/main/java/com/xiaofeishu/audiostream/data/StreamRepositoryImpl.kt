@@ -21,6 +21,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
@@ -58,6 +61,8 @@ class StreamRepositoryImpl @Inject constructor(
     private var collectJob: Job? = null
     private var reconnectJob: Job? = null
     private var watchdogJob: Job? = null
+    private var playbackJob: Job? = null
+    @Volatile private var playbackQueue: PlaybackQueue? = null
     @Volatile private var manualDisconnect = false
     @Volatile private var autoReconnectEnabled = false
     @Volatile private var activeProtocol: AudioProtocol? = null
@@ -153,6 +158,7 @@ class StreamRepositoryImpl @Inject constructor(
     }
 
     private fun onConnected(server: ServerInfo, event: AudioEvent.Connected) {
+        teardownPlayer()
         val player = playerFactory.create()
         player.initialize(event.format)
         player.setVolume(_state.value.volume)
@@ -162,6 +168,7 @@ class StreamRepositoryImpl @Inject constructor(
             }
         }
         currentPlayer = player
+        startPlaybackQueue(player, event.format)
         val targetBitrate = _state.value.currentBitrate
         bitrateTracker.reset()
         sessionStartedAtMs = System.currentTimeMillis()
@@ -223,23 +230,12 @@ class StreamRepositoryImpl @Inject constructor(
     private suspend fun onAudioData(event: AudioEvent.AudioData) {
         audioFramesReceived += 1
         val player = currentPlayer ?: return
-        if (localPlaybackAllowed) {
-            val threshold = settingsRepository.latencyMode.value
-            // AudioTrack.write 是阻塞调用，独占播放线程，避免与 Default 调度器上的
-            // 状态/flow 逻辑抢线程导致调度抖动 → 背压 → 丢帧（长播卡顿根因）。
-            withContext(playbackDispatcher) {
-                if (!player.isPlaying) player.resume()
-                val format = _state.value.audioFormat
-                if (format != null && threshold > 0) {
-                    player.playWithCatchup(event.data, format, threshold)
-                } else {
-                    player.play(event.data)
-                }
-            }
-        }
         val now = System.currentTimeMillis()
         lastAudioDataAtMs = now
         bitrateTracker.add(event.data.size, now)
+        if (localPlaybackAllowed) {
+            enqueueAudio(event.data)
+        }
         val received = _state.value.receivedBytes + event.data.size
         val stats = computeStats(now)
         val currentMediaState = _state.value.mediaState
@@ -375,7 +371,7 @@ class StreamRepositoryImpl @Inject constructor(
         appScope.launch { settingsRepository.saveTargetBitrate(normalized) }
     }
 
-    private fun onBitrateChanged(event: AudioEvent.BitrateChanged) {
+    private suspend fun onBitrateChanged(event: AudioEvent.BitrateChanged) {
         val player = currentPlayer
         val shouldPlay = localPlaybackAllowed && (_state.value.mediaState?.playing == true || player?.isPlaying == true)
         if (player != null) {
@@ -385,12 +381,16 @@ class StreamRepositoryImpl @Inject constructor(
             // _isPlaying 没置上 → 后续 play 丢数据无声，这里兜一次 recover。
             val current = player.currentStreamFormat()
             if (current == null || !sameFormat(current, event.format)) {
-                player.initialize(event.format)
-                player.setVolume(_state.value.volume)
-                if (shouldPlay) {
-                    player.start()
-                    if (!player.isPlaying) player.resume()
+                stopPlaybackQueue()
+                withContext(playbackDispatcher) {
+                    player.initialize(event.format)
+                    player.setVolume(_state.value.volume)
+                    if (shouldPlay) {
+                        player.start()
+                        if (!player.isPlaying) player.resume()
+                    }
                 }
+                startPlaybackQueue(player, event.format)
             }
         }
         _state.value = _state.value.copy(
@@ -438,7 +438,82 @@ class StreamRepositoryImpl @Inject constructor(
 
     private var currentPlayer: AudioPlayer? = null
 
+    private fun startPlaybackQueue(
+        player: AudioPlayer,
+        format: com.xiaofeishu.audiostream.domain.model.AudioFormat
+    ) {
+        stopPlaybackQueue()
+        val latencyMode = settingsRepository.latencyMode.value
+        val dropsOldest = latencyMode > 0
+        val queuedBytes = AtomicLong(0L)
+        val queue = Channel<ByteArray>(
+            capacity = audioQueueCapacity(latencyMode),
+            onBufferOverflow = if (dropsOldest) {
+                BufferOverflow.DROP_OLDEST
+            } else {
+                BufferOverflow.SUSPEND
+            },
+            onUndeliveredElement = { data -> removeQueuedAudio(queuedBytes, data) }
+        )
+        playbackQueue = PlaybackQueue(queue, queuedBytes, dropsOldest)
+        playbackJob = appScope.launch(playbackDispatcher) {
+            try {
+                for (data in queue) {
+                    try {
+                        if (!localPlaybackAllowed) continue
+                        if (!player.isPlaying) player.resume()
+                        val threshold = settingsRepository.latencyMode.value
+                        if (threshold > 0) {
+                            player.playWithCatchup(data, format, threshold)
+                        } else {
+                            player.play(data)
+                        }
+                    } finally {
+                        removeQueuedAudio(queuedBytes, data)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (playbackQueue?.channel !== queue) return@launch
+                val server = currentServer ?: return@launch
+                val attempt = currentAttempt
+                appScope.launch {
+                    collectJob?.cancel()
+                    onError(server, e, attempt)
+                }
+            }
+        }
+    }
+
+    private suspend fun enqueueAudio(data: ByteArray) {
+        val queue = playbackQueue ?: return
+        queue.queuedBytes.addAndGet(data.size.toLong())
+        if (queue.dropsOldest) {
+            if (queue.channel.trySend(data).isFailure) {
+                removeQueuedAudio(queue.queuedBytes, data)
+            }
+        } else {
+            queue.channel.send(data)
+        }
+    }
+
+    private fun removeQueuedAudio(queuedBytes: AtomicLong, data: ByteArray) {
+        queuedBytes.updateAndGet { current ->
+            (current - data.size).coerceAtLeast(0L)
+        }
+    }
+
+    private fun stopPlaybackQueue() {
+        val queue = playbackQueue
+        playbackQueue = null
+        playbackJob?.cancel()
+        playbackJob = null
+        queue?.channel?.cancel()
+    }
+
     private fun teardownPlayer() {
+        stopPlaybackQueue()
         currentPlayer?.release()
         currentPlayer = null
     }
@@ -451,7 +526,10 @@ class StreamRepositoryImpl @Inject constructor(
         val bufferLatencyMs = if (player != null && format != null && format.bytesPerFrame > 0 && format.sampleRate > 0) {
             val headFrames = player.playbackHeadPositionFrames()
             val writtenFrames = player.totalWrittenBytes / format.bytesPerFrame
-            val lagFrames = (writtenFrames - headFrames).coerceAtLeast(0L)
+            val trackLagFrames = (writtenFrames - headFrames).coerceAtLeast(0L)
+            val queuedFrames = (playbackQueue?.queuedBytes?.get() ?: 0L)
+                .coerceAtLeast(0L) / format.bytesPerFrame
+            val lagFrames = trackLagFrames + queuedFrames
             (lagFrames * 1000 / format.sampleRate)
                 .coerceAtMost(Int.MAX_VALUE.toLong())
                 .toInt()
@@ -487,6 +565,12 @@ class StreamRepositoryImpl @Inject constructor(
         }
     }
 
+    private data class PlaybackQueue(
+        val channel: Channel<ByteArray>,
+        val queuedBytes: AtomicLong,
+        val dropsOldest: Boolean
+    )
+
     companion object {
         private const val WINDOW_MS = 1000L
         private const val RECONNECT_BASE_DELAY_MS = 1000L
@@ -499,6 +583,13 @@ class StreamRepositoryImpl @Inject constructor(
          *  此前无声。略大于正常帧间隔抖动，避免服务端短暂卡顿误触发。 */
         private const val WATCHDOG_STALL_MS = 10_000L
         private const val WATCHDOG_CHECK_MS = 1_000L
+
+        private fun audioQueueCapacity(latencyMode: Int): Int = when (latencyMode) {
+            100 -> 2
+            150 -> 4
+            200 -> 6
+            else -> 8
+        }
 
         private fun normalizeTargetBitrate(bitrate: Int): Int {
             return if (bitrate > 0) bitrate else DEFAULT_TARGET_BITRATE

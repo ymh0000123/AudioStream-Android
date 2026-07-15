@@ -7,6 +7,7 @@ import com.xiaofeishu.audiostream.network.AudioEvent
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
@@ -51,17 +52,15 @@ class WebSocketProtocol(
                 val format = AudioFormat.fromJson(text)
                 if (format != null) {
                     handshakeCompleted.set(true)
-                    // 握手事件走 trySend：必须立即入队，不能因下游慢而挂起，
-                    // 否则握手超时检测与后续初始化时序会被背压拖延。
-                    trySend(AudioEvent.Connected(format))
+                    trySendBlocking(AudioEvent.Connected(format))
                 } else {
                     val mediaState = MediaState.fromJson(text)
                     if (mediaState != null) {
-                        launch { send(AudioEvent.StateUpdate(mediaState)) }
+                        trySendBlocking(AudioEvent.StateUpdate(mediaState))
                     } else {
                         val bitrateChange = parseBitrateChanged(text)
                         if (bitrateChange != null) {
-                            launch { send(AudioEvent.BitrateChanged(bitrateChange.first, bitrateChange.second)) }
+                            trySendBlocking(AudioEvent.BitrateChanged(bitrateChange.first, bitrateChange.second))
                         }
                     }
                 }
@@ -69,31 +68,28 @@ class WebSocketProtocol(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 binaryFrames += 1
-                // 音频数据用挂起 send：下游（AudioTrack.write）消费不过来时挂起回调线程，
-                // 把背压传导回网络读取，而不是 DROP_OLDEST 丢帧——长时间播放的卡顿/杂音
-                // 根因正是丢帧后码率塌陷+缓冲累积。OkHttp 单连接单回调线程被挂起=停读 socket，
-                // 这是期望的背压，安全。
-                launch { send(AudioEvent.AudioData(bytes.toByteArray())) }
+                // callbackFlow 中 launch { send(...) } 会在通道满后堆积挂起协程，绕过容量上限。
+                // 阻塞交付确保协议层不再形成隐藏队列；音频丢帧策略由播放侧的独立队列处理。
+                trySendBlocking(AudioEvent.AudioData(bytes.toByteArray()))
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 android.util.Log.w("AudioStreamWS", "onClosing code=$code reason=$reason [文本帧=$textFrames 二进制帧=$binaryFrames]")
                 webSocket.close(1000, null)
                 _isConnected = false
-                trySend(AudioEvent.Disconnected(reason))
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 android.util.Log.w("AudioStreamWS", "onClosed code=$code reason=$reason [文本帧=$textFrames 二进制帧=$binaryFrames]")
                 _isConnected = false
-                trySend(AudioEvent.Disconnected(reason))
+                trySendBlocking(AudioEvent.Disconnected(reason))
                 close()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 android.util.Log.w("AudioStreamWS", "onFailure [文本帧=$textFrames 二进制帧=$binaryFrames]", t)
                 _isConnected = false
-                trySend(AudioEvent.Error(t))
+                trySendBlocking(AudioEvent.Error(t))
                 close()
             }
         }
@@ -104,7 +100,7 @@ class WebSocketProtocol(
             delay(HANDSHAKE_TIMEOUT_MS)
             if (!handshakeCompleted.get()) {
                 val msg = if (!_isConnected) "连接超时" else "握手超时：服务端未发送格式信息"
-                trySend(AudioEvent.Error(SocketTimeoutException(msg)))
+                send(AudioEvent.Error(SocketTimeoutException(msg)))
                 webSocket?.close(1000, "Handshake timeout")
                 close()
             }
@@ -116,7 +112,7 @@ class WebSocketProtocol(
             webSocket = null
             _isConnected = false
         }
-    }.buffer(capacity = FLOW_BUFFER_CAPACITY, onBufferOverflow = BufferOverflow.SUSPEND)
+    }.buffer(capacity = Channel.RENDEZVOUS, onBufferOverflow = BufferOverflow.SUSPEND)
 
     override suspend fun disconnect() {
         webSocket?.close(1000, "Client disconnect")
@@ -153,11 +149,5 @@ class WebSocketProtocol(
 
     companion object {
         private const val HANDSHAKE_TIMEOUT_MS = 10_000L
-        /**
-         * Flow 内部 Channel 容量：仅用于平滑短时调度抖动（~180ms）。
-         * 下游 AudioTrack.write 消费不过来时用 SUSPEND 挂起 OkHttp 回调线程做背压，绝不丢帧。
-         * 旧值 64 在恢复后会产生 ~1.5s 积压，8 帧足够平滑抖动且积压可忽略。
-         */
-        private const val FLOW_BUFFER_CAPACITY = 8
     }
 }

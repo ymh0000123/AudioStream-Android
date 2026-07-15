@@ -3,6 +3,7 @@ package com.xiaofeishu.audiostream.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.os.SystemClock
 import com.xiaofeishu.audiostream.domain.model.AudioFormat as StreamFormat
 
@@ -18,6 +19,7 @@ class AudioPlayer(
 
     private var audioTrack: AudioTrack? = null
     private var _isPlaying = false
+    @Volatile private var released = false
     private var currentFormat: StreamFormat? = null
     private var negotiatedTo: String? = null
     private var currentVolume: Float = 1f
@@ -35,6 +37,7 @@ class AudioPlayer(
     val negotiationNote: String? get() = negotiatedTo
 
     fun initialize(format: StreamFormat) {
+        released = false
         releaseTrack()
         _isPlaying = false
         currentFormat = format
@@ -71,9 +74,7 @@ class AudioPlayer(
                 .coerceAtMost(pcmData.size - format.bytesPerFrame)
                 .let { it - (it % format.bytesPerFrame) }
             if (bytesToSkip > 0) {
-                totalWrittenBytes += bytesToSkip
-                val remaining = pcmData.copyOfRange(bytesToSkip, pcmData.size)
-                writeLoop(remaining)
+                writeLoop(pcmData, bytesToSkip, pcmData.size - bytesToSkip)
                 return
             }
         }
@@ -139,6 +140,7 @@ class AudioPlayer(
     fun currentStreamFormat(): StreamFormat? = currentFormat
 
     fun release() {
+        released = true
         stop()
         releaseTrack()
         totalWrittenBytes = 0L
@@ -204,10 +206,26 @@ class AudioPlayer(
             runCatching { track.release() }
             throw IllegalStateException("AudioTrack 初始化失败")
         }
+        if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val startThresholdFrames = (format.sampleRate * START_THRESHOLD_MS / 1000)
+                .coerceIn(1, track.bufferCapacityInFrames.coerceAtLeast(1))
+            runCatching { track.setStartThresholdInFrames(startThresholdFrames) }
+        }
+        android.util.Log.i(
+            "AudioStreamTrack",
+            "sampleRate=${format.sampleRate} bufferFrames=${track.bufferSizeInFrames}/" +
+                "${track.bufferCapacityInFrames} performanceMode=${track.performanceMode}" +
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    " startThreshold=${track.startThresholdInFrames}"
+                } else {
+                    ""
+                }
+        )
         return track
     }
 
     private fun recoverTrack(): Boolean {
+        if (released) return false
         val format = currentFormat ?: return false
         releaseTrack()
         return runCatching {
@@ -253,13 +271,18 @@ class AudioPlayer(
             errorCode == AudioTrack.ERROR_INVALID_OPERATION
     }
 
-    private fun writeLoop(pcmData: ByteArray) {
-        var offset = 0
+    private fun writeLoop(
+        pcmData: ByteArray,
+        startOffset: Int = 0,
+        length: Int = pcmData.size - startOffset
+    ) {
+        var offset = startOffset
+        val endOffset = (startOffset + length).coerceAtMost(pcmData.size)
         var zeroWriteCount = 0
-        while (offset < pcmData.size) {
+        while (offset < endOffset) {
             val track = currentOrRecoveredTrack() ?: return
             val written = try {
-                track.write(pcmData, offset, pcmData.size - offset)
+                track.write(pcmData, offset, endOffset - offset)
             } catch (_: IllegalStateException) {
                 if (recoverTrack()) continue else return
             }
@@ -291,15 +314,13 @@ class AudioPlayer(
                 }
             }
         }
-        if (offset > 0) {
-            try {
-                audioTrack?.play()
-            } catch (_: IllegalStateException) {}
+        if (offset > startOffset) {
             recoverStalledPlaybackIfNeeded()
         }
     }
 
     private fun currentOrRecoveredTrack(): AudioTrack? {
+        if (released) return null
         val track = audioTrack
         if (track != null) return track
         return if (recoverTrack()) audioTrack else null
@@ -329,6 +350,7 @@ class AudioPlayer(
         private const val WRITE_RETRY_DELAY_MS = 2L
         private const val STALL_CHECK_INTERVAL_MS = 1_000L
         private const val PLAYBACK_STALL_MS = 3_000L
+        private const val START_THRESHOLD_MS = 20
         private const val MAX_TRACK_LIFETIME_MS = 2 * 60 * 60 * 1000L
         private const val PLAYBACK_HEAD_MASK = 0xffffffffL
         private const val PLAYBACK_HEAD_WRAP = 1L shl 32
