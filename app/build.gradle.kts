@@ -8,6 +8,16 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+val appVersionName = providers.gradleProperty("appVersionName")
+    .getOrElse("1.0.1")
+    .removePrefix("v")
+    .removePrefix("V")
+val appVersionCode = providers.gradleProperty("appVersionCode")
+    .getOrElse("2")
+    .toIntOrNull()
+    ?.takeIf { it > 0 }
+    ?: error("appVersionCode must be a positive integer")
+
 android {
     namespace = "com.xiaofeishu.audiostream"
     compileSdk = 35
@@ -16,8 +26,8 @@ android {
         applicationId = "com.xiaofeishu.audiostream"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         buildConfigField(
             "String",
             "UPDATE_API_URL",

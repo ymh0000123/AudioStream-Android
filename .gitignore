@@ -33,4 +33,4 @@
 
 # 本地日志 / 草稿
 /crash-logs
-/build - 副本.ps1
+/build - *.ps1

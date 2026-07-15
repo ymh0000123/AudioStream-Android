@@ -66,6 +66,24 @@ Requirements · 环境要求:**JDK 17**, Android SDK (`ANDROID_HOME`), `JAVA_HOM
 
 Artifact path · 产物路径:`app/build/outputs/apk/<debug|release>/*.apk`
 
+The default app version is declared in `app/build.gradle.kts`. To override it locally:
+默认应用版本在 `app/build.gradle.kts` 中声明；本地构建可通过参数覆盖：
+
+```bash
+./gradlew assembleRelease -PappVersionName=1.1.0 -PappVersionCode=3
+```
+
+The official `build.ps1` script accepts the same overrides:
+正式的 `build.ps1` 脚本也支持相同的版本覆盖参数：
+
+```powershell
+.\build.ps1 -VersionName 1.1.0 -VersionCode 3 -NoInstall
+```
+
+GitHub Release builds automatically use the release tag (for example `v1.1.0`) as
+the APK `versionName`, and the workflow run number as `versionCode`.
+GitHub Release 构建会自动将标签（如 `v1.1.0`）写入 APK 的 `versionName`，并使用工作流运行编号作为 `versionCode`。
+
 ### 🔑 Signing · 签名
 
 The signing keystore is **not** checked into the repository. `build.ps1` / `build.bat` will automatically generate `xiaofeishu.keystore` on first build via `keytool` if it is missing. Signing credentials are read from environment variables or `local.properties` (git-ignored): `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`.

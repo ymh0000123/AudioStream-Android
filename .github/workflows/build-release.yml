@@ -128,7 +128,19 @@ jobs:
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: ./gradlew clean assembleRelease --no-daemon --no-configuration-cache --stacktrace
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name || '' }}
+        run: |
+          version_args=("-PappVersionCode=${GITHUB_RUN_NUMBER}")
+          if [ -n "$RELEASE_TAG" ]; then
+            version_name="${RELEASE_TAG#v}"
+            version_name="${version_name#V}"
+            version_args+=("-PappVersionName=${version_name}")
+          fi
+          ./gradlew clean assembleRelease \
+            "${version_args[@]}" \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace
 
       - name: Collect release APK
         run: |

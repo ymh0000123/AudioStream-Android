@@ -5,6 +5,10 @@
 param(
     [string]$BuildType = "release",
     [string]$DeviceIp,
+    [ValidatePattern('^[vV]?\d+(\.\d+){1,2}([-.+][0-9A-Za-z.-]+)?$')]
+    [string]$VersionName,
+    [ValidateRange(1, 2147483647)]
+    [Nullable[int]]$VersionCode,
     [switch]$Uninstall,
     [switch]$NoInstall
 )
@@ -116,11 +120,16 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "🔨 正在编译 $BuildType APK..." -ForegroundColor Green
 
-if ($BuildType -eq "debug") {
-    & .\gradlew.bat assembleDebug
-} else {
-    & .\gradlew.bat assembleRelease
+$gradleArgs = @()
+if ($VersionName) {
+    $normalizedVersionName = $VersionName -replace '^[vV]', ''
+    $gradleArgs += "-PappVersionName=$normalizedVersionName"
 }
+if ($null -ne $VersionCode) {
+    $gradleArgs += "-PappVersionCode=$VersionCode"
+}
+$assembleTask = if ($BuildType -eq "debug") { "assembleDebug" } else { "assembleRelease" }
+& .\gradlew.bat $assembleTask @gradleArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ 编译失败" -ForegroundColor Red
@@ -151,6 +160,14 @@ Write-Host "📋 包信息:" -ForegroundColor Yellow
 Write-Host "   包名: com.xiaofeishu.audiostream" -ForegroundColor White
 Write-Host "   签名: xiaofeishu.keystore" -ForegroundColor White
 Write-Host "   签名别名: $keyAlias" -ForegroundColor White
+$metadataPath = Join-Path $apkPath "output-metadata.json"
+if (Test-Path $metadataPath) {
+    $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+    $apkMetadata = $metadata.elements | Select-Object -First 1
+    if ($apkMetadata) {
+        Write-Host "   版本: $($apkMetadata.versionName) ($($apkMetadata.versionCode))" -ForegroundColor White
+    }
+}
 
 # 步骤 5: ADB 安装（默认执行，-NoInstall 跳过）
 if (-not $NoInstall) {
