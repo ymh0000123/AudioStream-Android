@@ -18,6 +18,26 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+        buildConfigField(
+            "String",
+            "UPDATE_API_URL",
+            "\"https://api.github.com/repos/ymh0000123/AudioStream-Android/releases/latest\""
+        )
+        buildConfigField(
+            "String",
+            "UPDATE_RELEASES_URL",
+            "\"https://github.com/ymh0000123/AudioStream-Android/releases/latest\""
+        )
+        buildConfigField(
+            "String",
+            "UPDATE_LATEST_APK_URL",
+            "\"https://github.com/ymh0000123/AudioStream-Android/releases/latest/download/app-release.apk\""
+        )
+        buildConfigField(
+            "String",
+            "GITHUB_MIRROR_PREFIX",
+            "\"https://ghproxy.net/\""
+        )
     }
 
     // 签名口令从环境变量或 local.properties 读取(不入仓库)。
@@ -117,4 +137,6 @@ dependencies {
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    testImplementation("junit:junit:4.13.2")
 }

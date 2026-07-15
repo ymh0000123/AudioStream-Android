@@ -70,4 +70,22 @@
     <string name="latency_mode_balanced">平衡 (150ms)</string>
     <string name="latency_mode_stable">稳定 (200ms)</string>
     <string name="latency_mode_disabled">关闭跳帧</string>
+    <string name="check_for_updates">检查更新</string>
+    <string name="check_now">立即检查</string>
+    <string name="current_version">当前版本：%1$s</string>
+    <string name="update_checking">正在检查最新版本…</string>
+    <string name="update_available_title">发现新版本</string>
+    <string name="latest_version">最新版本：%1$s</string>
+    <string name="update_notes">更新说明</string>
+    <string name="no_release_notes">本次更新没有提供说明。</string>
+    <string name="download_update">前往下载</string>
+    <string name="download_method_title">选择下载方式</string>
+    <string name="download_method_desc">镜像适合 GitHub 访问较慢的网络，下载内容与 GitHub 直连相同。</string>
+    <string name="download_via_mirror">镜像下载</string>
+    <string name="download_via_github">GitHub 直连</string>
+    <string name="already_latest_title">已是最新版本</string>
+    <string name="already_latest_desc">当前安装的 %1$s 已是最新版本。</string>
+    <string name="update_check_failed_title">检查更新失败</string>
+    <string name="retry">重试</string>
+    <string name="close">关闭</string>
 </resources>
