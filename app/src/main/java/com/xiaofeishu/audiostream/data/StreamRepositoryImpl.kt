@@ -125,6 +125,10 @@ class StreamRepositoryImpl @Inject constructor(
     private fun startSession(server: ServerInfo, attempt: Int) {
         collectJob?.cancel()
         watchdogJob?.cancel()
+        // 新会话重置本地播放闸门：connect() 会重置，但 watchdog/自动重连直接走 startSession，
+        // 若沿用上次会话的本地暂停（localPlaybackAllowed=false），重连后所有 PCM 会被静默丢弃，
+        // 表现为"状态显示暂停且永远无声"。
+        localPlaybackAllowed = true
         currentServer = server
         currentAttempt = attempt
         val protocol = protocolFactory.create(server.protocol)
@@ -333,7 +337,11 @@ class StreamRepositoryImpl @Inject constructor(
 
     override fun sendCommand(action: MediaAction) {
         if (action == MediaAction.PLAY_PAUSE) {
-            val isCurrentlyPlaying = _state.value.mediaState?.playing == true || currentPlayer?.isPlaying == true
+            // 切换基准必须与 UI/通知栏展示的状态同源（mediaState.playing / PLAYING），
+            // 不能掺入 player.isPlaying：修复后 AudioTrack 在服务端"暂停"时仍保持 play 态，
+            // 若据其判断，界面显示"暂停"时按播放会被误判为"正在播放"而把声音关掉。
+            val isCurrentlyPlaying = _state.value.mediaState?.playing == true ||
+                _state.value.connectionState == ConnectionState.PLAYING
             val shouldPlay = !isCurrentlyPlaying
             localPlaybackAllowed = shouldPlay
             updateLocalMediaState(shouldPlay)
@@ -373,7 +381,8 @@ class StreamRepositoryImpl @Inject constructor(
 
     private suspend fun onBitrateChanged(event: AudioEvent.BitrateChanged) {
         val player = currentPlayer
-        val shouldPlay = localPlaybackAllowed && (_state.value.mediaState?.playing == true || player?.isPlaying == true)
+        // 是否续播只看本地播放闸门：服务端"暂停"元数据与 player.isPlaying 瞬时值都不可靠
+        val shouldPlay = localPlaybackAllowed
         if (player != null) {
             // 仅当 PCM 格式（采样率/通道/位深）真正变化才重建 AudioTrack。
             // 服务端同格式降比特率不重建，避免 flush 掉已缓冲 PCM 造成断帧/杂音；
@@ -408,12 +417,14 @@ class StreamRepositoryImpl @Inject constructor(
         if (mediaState.playing) {
             localPlaybackAllowed = true
         }
-        // Some desktop apps do not expose playback to MSTC/SMTC, so their state can be
-        // "not playing" while the PCM stream is still active. Keep local audio alive in that case.
+        // 服务端媒体状态只是 SMTC 元数据：桌面端很多声音源（游戏/浏览器等）不注册 SMTC，
+        // 状态为"暂停"时 PCM 流仍可能在正常推送。本地是否出声只取决于用户是否本地暂停
+        // （localPlaybackAllowed），绝不因服务端"暂停"状态拉停本地 AudioTrack——
+        // 旧逻辑在这里 pause 播放器，宽限判断又依赖 player.isPlaying 的瞬时值，
+        // 竞态下会造成"状态是暂停就没声音"。
+        syncPlayerPlayback(localPlaybackAllowed)
         val hasRecentAudio = System.currentTimeMillis() - lastAudioDataAtMs <= STREAM_ACTIVE_GRACE_MS
-        val effectivePlaying = mediaState.playing ||
-            (localPlaybackAllowed && hasRecentAudio && currentPlayer?.isPlaying == true)
-        syncPlayerPlayback(effectivePlaying)
+        val effectivePlaying = localPlaybackAllowed && (mediaState.playing || hasRecentAudio)
         _state.value = _state.value.copy(
             connectionState = if (effectivePlaying) ConnectionState.PLAYING else ConnectionState.CONNECTED,
             mediaState = mediaState.copy(playing = effectivePlaying)

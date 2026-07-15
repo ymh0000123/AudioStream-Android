@@ -165,9 +165,19 @@ class AudioStreamService : Service() {
             else -> getString(R.string.notification_disconnected)
         }
         updateMediaSession(state)
-        val notification = buildNotification(text, state.mediaState)
+        val notification = buildNotification(text, state.mediaState, isLocallyPlaying(state))
         val manager = getSystemService(NotificationManager::class.java)
         manager?.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * 本地是否正在出声的统一判据：mediaState.playing（仓库层已归一化为本地实际播放状态）
+     * 或 connectionState == PLAYING（音频数据正在写入，mediaState 可能尚未建立/为 null）。
+     * MediaSession 状态、通知按钮、播放/暂停切换必须同源，否则会出现
+     * "系统显示暂停但在出声 / 按播放反而静音"的错位。
+     */
+    private fun isLocallyPlaying(state: com.xiaofeishu.audiostream.domain.model.PlaybackState): Boolean {
+        return state.mediaState?.playing == true || state.connectionState == ConnectionState.PLAYING
     }
 
     private fun updateMediaSession(state: com.xiaofeishu.audiostream.domain.model.PlaybackState) {
@@ -187,7 +197,7 @@ class AudioStreamService : Service() {
                 .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, ms?.durationMs ?: 0)
             mediaSession.setMetadata(metadataBuilder.build())
 
-            val pbState = if (ms?.playing == true)
+            val pbState = if (isLocallyPlaying(state))
                 PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
             mediaSession.setPlaybackState(
                 PlaybackStateCompat.Builder()
@@ -238,18 +248,22 @@ class AudioStreamService : Service() {
     }
 
     private fun requestPlay() {
-        if (streamRepository.state.value.mediaState?.playing != true) {
+        if (!isLocallyPlaying(streamRepository.state.value)) {
             streamRepository.sendCommand(MediaAction.PLAY_PAUSE)
         }
     }
 
     private fun requestPause() {
-        if (streamRepository.state.value.mediaState?.playing == true) {
+        if (isLocallyPlaying(streamRepository.state.value)) {
             streamRepository.sendCommand(MediaAction.PLAY_PAUSE)
         }
     }
 
-    private fun buildNotification(text: String, mediaState: MediaState? = null): Notification {
+    private fun buildNotification(
+        text: String,
+        mediaState: MediaState? = null,
+        playing: Boolean = false
+    ): Notification {
         val contentIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -261,8 +275,8 @@ class AudioStreamService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val playPauseIcon = if (mediaState?.playing == true) R.drawable.ic_pause else R.drawable.ic_play
-        val playPauseLabel = if (mediaState?.playing == true) getString(R.string.pause) else getString(R.string.play)
+        val playPauseIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play
+        val playPauseLabel = if (playing) getString(R.string.pause) else getString(R.string.play)
         val playPauseIntent = buildMediaPendingIntent(MediaAction.PLAY_PAUSE, REQUEST_CODE_PLAY_PAUSE)
         val prevIntent = buildMediaPendingIntent(MediaAction.PREVIOUS, REQUEST_CODE_PREV)
         val nextIntent = buildMediaPendingIntent(MediaAction.NEXT, REQUEST_CODE_NEXT)

@@ -8,12 +8,10 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val appVersionName = providers.gradleProperty("appVersionName")
-    .getOrElse("1.0.1")
+val appVersionName = (findProperty("appVersionName") as? String ?: "1.1.1")
     .removePrefix("v")
     .removePrefix("V")
-val appVersionCode = providers.gradleProperty("appVersionCode")
-    .getOrElse("2")
+val appVersionCode = (findProperty("appVersionCode") as? String ?: "13")
     .toIntOrNull()
     ?.takeIf { it > 0 }
     ?: error("appVersionCode must be a positive integer")

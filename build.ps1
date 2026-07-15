@@ -25,6 +25,29 @@ function Pause-Exit {
     exit $Code
 }
 
+function Get-GitVersion {
+    $defaultVersionName = "1.0.1"
+    $defaultVersionCode = 2
+
+    try {
+        $null = git --version 2>&1
+        if (-not $?) { return @{ Name = $defaultVersionName; Code = $defaultVersionCode } }
+
+        $null = git rev-parse --is-inside-work-tree 2>&1
+        if (-not $?) { return @{ Name = $defaultVersionName; Code = $defaultVersionCode } }
+
+        $tag = git describe --tags --abbrev=0 2>$null
+        $versionName = if ($tag) { $tag -replace '^[vV]', '' } else { $defaultVersionName }
+
+        $commitCount = git rev-list --count HEAD 2>$null
+        $versionCode = if ($commitCount -and $commitCount -match '^\d+$') { [int]$commitCount } else { $defaultVersionCode }
+
+        return @{ Name = $versionName; Code = $versionCode }
+    } catch {
+        return @{ Name = $defaultVersionName; Code = $defaultVersionCode }
+    }
+}
+
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Cyan
 Write-Host "       AudioStream Android 编译脚本" -ForegroundColor Cyan
@@ -107,7 +130,27 @@ if (-not (Test-Path $keystorePath)) {
     Write-Host "✅ 签名密钥已存在: $keystorePath" -ForegroundColor Green
 }
 
-# 步骤 2: 清理旧构建
+# 步骤 2: 自动检测版本
+if (-not $VersionName -or $null -eq $VersionCode) {
+    $gitVersion = Get-GitVersion
+    if (-not $VersionName) {
+        $VersionName = $gitVersion.Name
+        $versionSource = "git tag"
+    } else {
+        $versionSource = "参数"
+    }
+    if ($null -eq $VersionCode) {
+        $VersionCode = $gitVersion.Code
+    }
+} else {
+    $versionSource = "参数"
+}
+$normalizedVersionName = $VersionName -replace '^[vV]', ''
+
+Write-Host ""
+Write-Host "📋 版本: $normalizedVersionName (code: $VersionCode) [$versionSource]" -ForegroundColor Yellow
+
+# 步骤 3: 清理旧构建
 Write-Host ""
 Write-Host "🧹 正在清理旧构建..." -ForegroundColor Yellow
 & .\gradlew.bat clean
@@ -116,13 +159,12 @@ if ($LASTEXITCODE -ne 0) {
     Pause-Exit 1
 }
 
-# 步骤 3: 编译 APK
+# 步骤 4: 编译 APK
 Write-Host ""
 Write-Host "🔨 正在编译 $BuildType APK..." -ForegroundColor Green
 
 $gradleArgs = @()
-if ($VersionName) {
-    $normalizedVersionName = $VersionName -replace '^[vV]', ''
+if ($normalizedVersionName) {
     $gradleArgs += "-PappVersionName=$normalizedVersionName"
 }
 if ($null -ne $VersionCode) {
@@ -136,7 +178,7 @@ if ($LASTEXITCODE -ne 0) {
     Pause-Exit 1
 }
 
-# 步骤 4: 显示编译结果
+# 步骤 5: 显示编译结果
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  编译完成!" -ForegroundColor Green
@@ -160,16 +202,21 @@ Write-Host "📋 包信息:" -ForegroundColor Yellow
 Write-Host "   包名: com.xiaofeishu.audiostream" -ForegroundColor White
 Write-Host "   签名: xiaofeishu.keystore" -ForegroundColor White
 Write-Host "   签名别名: $keyAlias" -ForegroundColor White
+Write-Host "   版本: $normalizedVersionName ($VersionCode)" -ForegroundColor White
 $metadataPath = Join-Path $apkPath "output-metadata.json"
 if (Test-Path $metadataPath) {
-    $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
-    $apkMetadata = $metadata.elements | Select-Object -First 1
-    if ($apkMetadata) {
-        Write-Host "   版本: $($apkMetadata.versionName) ($($apkMetadata.versionCode))" -ForegroundColor White
+    try {
+        $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+        $apkMetadata = $metadata.elements | Select-Object -First 1
+        if ($apkMetadata) {
+            Write-Host "   APK 内版本: $($apkMetadata.versionName) ($($apkMetadata.versionCode))" -ForegroundColor Gray
+        }
+    } catch {
+        # AGP 8.x 的 output-metadata.json 格式变更时静默忽略
     }
 }
 
-# 步骤 5: ADB 安装（默认执行，-NoInstall 跳过）
+# 步骤 6: ADB 安装（默认执行，-NoInstall 跳过）
 if (-not $NoInstall) {
     Write-Host ""
     Write-Host "📲 正在通过 ADB 安装..." -ForegroundColor Cyan
