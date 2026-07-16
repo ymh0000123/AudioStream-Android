@@ -1,6 +1,7 @@
 package com.xiaofeishu.audiostream.data
 
 import android.media.AudioTrack
+import android.os.SystemClock
 import com.xiaofeishu.audiostream.audio.AudioPlayer
 import com.xiaofeishu.audiostream.audio.AudioPlayerFactory
 import com.xiaofeishu.audiostream.domain.model.ConnectionState
@@ -44,6 +45,7 @@ import kotlin.math.min
  * - 连接/断开、音量
  * - 自动重连（指数退避 1s→30s，仅在 autoReconnect 且非用户主动断开时触发）
  * - 码率滑动窗口统计、客户端缓冲延迟、连接质量评级
+ * - 积压回落（窗口最小积压超出目标水位即丢弃净冗余，卡顿后延迟可回落）
  * - 错误上屏（PlaybackState.error）
  */
 @Singleton
@@ -379,6 +381,13 @@ class StreamRepositoryImpl @Inject constructor(
         protocol.send(MediaAction.SEEK_TO.toJson(positionMs))
     }
 
+    override fun setServerMute(muted: Boolean) {
+        val protocol = activeProtocol ?: return
+        if (!protocol.isConnected) return
+        // 服务端执行后立即广播新状态（含 muted），UI 由 onStateUpdate 自然刷新
+        protocol.send("""{"type":"command","action":"set_mute","mute":$muted}""")
+    }
+
     override fun setVolume(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
         _state.value = _state.value.copy(volume = clamped)
@@ -488,12 +497,91 @@ class StreamRepositoryImpl @Inject constructor(
         )
         playbackQueue = PlaybackQueue(queue, queuedBytes)
         playbackJob = appScope.launch(playbackDispatcher) {
+            // 积压回落：以 TRIM_WINDOW_MS 为周期跟踪"总积压（track 未播 + 队列）的窗口最小值"。
+            // 实时流到达速率=消耗速率，卡顿/突发留下的积压既不会再涨（写入阻塞封顶）也不会
+            // 自行回落（消耗恒为实时），表现为"卡顿一下延迟就永久升高"。窗口最小值减目标水位
+            // 是整个窗口内从未被到达抖动消耗过的净冗余，按此量丢弃最旧输入不会引发新欠载。
+            //
+            // 低点必须在"接收阻塞"上测，不能只在有包时采样：成簇到达（WiFi 省电/蓝牙共存很
+            // 典型）时，簇间空隙里本循环阻塞在 receive 上无样本，track 水位一路下探才是真实
+            // 低点；簇落地后再采样看到的是"track 放空+队列灌满"，会严重高估可丢弃量，把空隙
+            // 刚需的抖动缓冲丢掉，造成周期性欠载断音。低点样本仅在"迭代结束时队列已空"时合成
+            // （此时总积压=track 水位且按实时下降）：队列非空的迭代间隙只是调度抖动，若也按
+            // "track 水位-间隔"合成会把满队列稳态误标成低水位，回落将永远不触发。
+            //
+            // 跳帧档（threshold>0）由 playWithCatchup 主动收敛到档位值，此机制天然不触发，
+            // 实际服务于"禁用跳帧"档：不再只靠 24 包 DROP_OLDEST 封顶、升上去回不来。
+            var trimWindowStartMs = 0L
+            var trimWindowMinMs = Int.MAX_VALUE
+            var trimBytesRemaining = 0L
+            var iterEndAtMs = 0L
+            var iterEndTrackLagMs = 0
+            var iterEndQueueEmpty = false
+
+            fun trackLagMsNow(): Int {
+                if (format.bytesPerFrame <= 0 || format.sampleRate <= 0) return 0
+                val lagFrames = (player.totalWrittenBytes / format.bytesPerFrame -
+                    player.playbackHeadPositionFrames()).coerceAtLeast(0L)
+                return (lagFrames * 1000 / format.sampleRate)
+                    .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            }
+
             try {
                 for (data in queue) {
                     try {
-                        if (!localPlaybackAllowed) continue
+                        if (!localPlaybackAllowed) {
+                            // 本地暂停期间队列被持续丢弃且 track 已释放，窗口样本失效
+                            trimWindowStartMs = 0L
+                            trimBytesRemaining = 0L
+                            iterEndAtMs = 0L
+                            continue
+                        }
+                        if (trimBytesRemaining >= data.size) {
+                            trimBytesRemaining -= data.size
+                            continue
+                        }
+                        trimBytesRemaining = 0L
                         if (!player.isPlaying) player.resume()
                         val threshold = settingsRepository.latencyMode.value
+                        if (format.bytesPerFrame > 0 && format.sampleRate > 0) {
+                            val nowMs = SystemClock.elapsedRealtime()
+                            if (trimWindowStartMs == 0L) {
+                                trimWindowStartMs = nowMs
+                                trimWindowMinMs = Int.MAX_VALUE
+                            }
+                            // 低点样本：仅当上一迭代结束时队列已空，到本次唤醒之间 receive 才是
+                            // 在空队列上等待，总积压 = 迭代结束时 track 水位按实时消耗 blockedMs。
+                            // 队列非空的迭代间隙只是调度抖动，按此合成会把满队列稳态误标成低水位。
+                            if (iterEndAtMs > 0L && iterEndQueueEmpty) {
+                                val blockedMs = (nowMs - iterEndAtMs).toInt()
+                                if (blockedMs > 0) {
+                                    val dipMs = (iterEndTrackLagMs - blockedMs).coerceAtLeast(0)
+                                    trimWindowMinMs = min(trimWindowMinMs, dipMs)
+                                }
+                            }
+                            // 流动态样本：排除当前包（它即将写入，不属于"排队冗余"；
+                            // 计入会让稳态最小值虚高约一包，跳帧档下每窗口切一刀出咔哒声）
+                            val queuedFrames = (queuedBytes.get() - data.size).coerceAtLeast(0L) /
+                                format.bytesPerFrame
+                            val steadyMs = trackLagMsNow() +
+                                (queuedFrames * 1000 / format.sampleRate)
+                                    .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                            trimWindowMinMs = min(trimWindowMinMs, steadyMs)
+                            if (nowMs - trimWindowStartMs >= TRIM_WINDOW_MS) {
+                                val targetMs = if (threshold > 0) threshold else TRIM_FLOOR_DISABLED_MS
+                                val excessMs = trimWindowMinMs - targetMs
+                                // 门槛 2 包起：采样噪声不值得为几十毫秒切一刀
+                                if (excessMs >= TRIM_MIN_EXCESS_MS) {
+                                    trimBytesRemaining = excessMs.toLong() *
+                                        format.sampleRate / 1000 * format.bytesPerFrame
+                                    android.util.Log.i("AudioStreamRepo",
+                                        "积压回落：${TRIM_WINDOW_MS / 1000}s 窗口最小积压 ${trimWindowMinMs}ms " +
+                                            "超出目标 ${targetMs}ms，丢弃 ${excessMs}ms 陈旧音频")
+                                }
+                                trimWindowStartMs = nowMs
+                                trimWindowMinMs = Int.MAX_VALUE
+                            }
+                        }
                         if (threshold > 0) {
                             // 本包已出队，queuedBytes 里扣除本包后即"仍排在后面"的积压
                             val pendingBytes = (queuedBytes.get() - data.size).coerceAtLeast(0L)
@@ -501,6 +589,10 @@ class StreamRepositoryImpl @Inject constructor(
                         } else {
                             player.play(data)
                         }
+                        // 写入完成后记录 track 水位/队列是否已空/时刻，供下次唤醒合成低点样本
+                        iterEndTrackLagMs = trackLagMsNow()
+                        iterEndQueueEmpty = (queuedBytes.get() - data.size) <= 0L
+                        iterEndAtMs = SystemClock.elapsedRealtime()
                     } finally {
                         removeQueuedAudio(queuedBytes, data)
                     }
@@ -625,9 +717,18 @@ class StreamRepositoryImpl @Inject constructor(
         private const val WATCHDOG_STALL_MS = 10_000L
         private const val WATCHDOG_CHECK_MS = 1_000L
 
+        /** 积压回落观察窗口：窗口内总积压最小值减目标水位 = 从未被抖动消耗的净冗余，可安全丢弃。 */
+        private const val TRIM_WINDOW_MS = 8_000L
+
+        /** 禁用跳帧档的回落目标水位（ms）：保留可观抖动余量，只清除卡顿留下的永久积压。 */
+        private const val TRIM_FLOOR_DISABLED_MS = 160
+
+        /** 回落执行门槛（ms，2 包）：低于此值的"冗余"属采样噪声，切割只会产生咔哒声。 */
+        private const val TRIM_MIN_EXCESS_MS = 40
+
         /** 播放队列容量（包，每包 20ms）。100/150/200 档配合跳帧追赶取小容量；
-         *  0（禁用跳帧）档不主动追赶，用大容量降低丢帧概率，仅在积压超 ~480ms 时
-         *  丢最旧兜底，防止延迟无界累积。 */
+         *  0（禁用跳帧）档不主动追赶，用大容量降低丢帧概率：溢出时丢最旧兜底，
+         *  卡顿留下的持久积压由窗口最小积压回落机制清除（见 startPlaybackQueue）。 */
         private fun audioQueueCapacity(latencyMode: Int): Int = when (latencyMode) {
             100 -> 2
             150 -> 4

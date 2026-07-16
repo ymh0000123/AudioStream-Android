@@ -10,12 +10,14 @@ import com.xiaofeishu.audiostream.domain.model.PlaybackState
 import com.xiaofeishu.audiostream.domain.model.Quality
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
 import com.xiaofeishu.audiostream.domain.model.StreamStats
+import com.xiaofeishu.audiostream.domain.repository.SettingsRepository
 import com.xiaofeishu.audiostream.domain.repository.StreamRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -23,7 +25,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
-    private val streamRepository: StreamRepository
+    private val streamRepository: StreamRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     val uiState: StateFlow<PlayerUiState> = streamRepository.state
@@ -34,8 +37,16 @@ class PlayerViewModel @Inject constructor(
             initialValue = streamRepository.state.value.toUiState()
         )
 
+    /** 是否忽略蓝牙链路延迟警告提示（持久化，可在设置页恢复）。 */
+    val hideSinkLatencyHint: StateFlow<Boolean> = settingsRepository.hideSinkLatencyHint
+
+    fun ignoreSinkLatencyHint() {
+        viewModelScope.launch { settingsRepository.saveHideSinkLatencyHint(true) }
+    }
+
     fun connect(server: ServerInfo) = streamRepository.connect(server)
     fun disconnect() = streamRepository.disconnect()
+    fun setServerMute(muted: Boolean) = streamRepository.setServerMute(muted)
 
     /** 重连到上一次选择的服务器（用于播放页的"开始连接"）。 */
     fun reconnectPending() {

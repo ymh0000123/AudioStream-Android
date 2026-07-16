@@ -34,4 +34,7 @@ interface StreamRepository {
 
     /** 请求指定码率（kbps）。 */
     fun setBitrate(bitrate: Int)
+
+    /** 静音/恢复服务端（电脑）扬声器。采集不受影响，本机串流照常播放。 */
+    fun setServerMute(muted: Boolean)
 }

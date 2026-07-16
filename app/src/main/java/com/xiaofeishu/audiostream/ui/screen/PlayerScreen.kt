@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -129,7 +131,13 @@ fun PlayerScreen(
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            StatsBar(stats = state.stats, receivedBytes = state.receivedBytes)
+            val hideHint by viewModel.hideSinkLatencyHint.collectAsState()
+            StatsBar(
+                stats = state.stats,
+                receivedBytes = state.receivedBytes,
+                showSinkLatencyHint = !hideHint,
+                onIgnoreSinkLatencyHint = viewModel::ignoreSinkLatencyHint
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -222,6 +230,30 @@ fun PlayerScreen(
                             Spacer(Modifier.width(4.dp))
                             Text("下一曲")
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 服务端静音：只关电脑扬声器。采集在端点静音之前，手机端串流照常播放。
+                    val serverMuted = ms?.muted == true
+                    OutlinedButton(
+                        onClick = { viewModel.setServerMute(!serverMuted) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = if (serverMuted) {
+                            ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        }
+                    ) {
+                        Icon(
+                            if (serverMuted) Icons.AutoMirrored.Filled.VolumeOff
+                            else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (serverMuted) "电脑已静音，点击恢复" else "静音电脑（手机继续播放）")
                     }
                 }
             }

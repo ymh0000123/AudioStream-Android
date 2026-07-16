@@ -143,6 +143,11 @@ class AudioPlayer(
         audioTrack?.setVolume(clamped)
     }
 
+    // 必须加锁：播放线程（跳帧/回落）与统计线程（computeStats）并发调用，
+    // 回绕检测读改写 lastPlaybackHeadRaw 时若读到对方刚更新的更大值，会把单调
+    // 递增的 head 误判为回绕 +2^32 帧——此后 head 虚增，跳帧追赶永久失效、
+    // 延迟统计归零，直到 track 重建才恢复。
+    @Synchronized
     fun playbackHeadPositionFrames(): Long {
         val track = audioTrack ?: return 0
         val raw = runCatching {
@@ -422,6 +427,7 @@ class AudioPlayer(
         totalWrittenBytes = 0L
     }
 
+    @Synchronized
     private fun resetTrackCounters() {
         trackStartedAtMs = SystemClock.elapsedRealtime()
         playbackHeadWraps = 0L
