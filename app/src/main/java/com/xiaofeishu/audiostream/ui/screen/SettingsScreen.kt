@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -139,6 +140,26 @@ fun SettingsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp)
+                )
+            }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 蓝牙链路延迟警告提示：忽略后可在此恢复
+        val hideSinkLatencyHint by viewModel.hideSinkLatencyHint.collectAsState()
+        ListItem(
+            headlineContent = { Text("链路延迟警告提示") },
+            supportingContent = {
+                Text(
+                    if (hideSinkLatencyHint) "已忽略：蓝牙输出时不再显示链路延迟警告"
+                    else "蓝牙输出时在播放页显示链路延迟警告"
+                )
+            },
+            trailingContent = {
+                Switch(
+                    checked = !hideSinkLatencyHint,
+                    onCheckedChange = { show -> viewModel.setHideSinkLatencyHint(!show) }
                 )
             }
         )

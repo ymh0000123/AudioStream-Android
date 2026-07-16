@@ -71,6 +71,13 @@ class HomeViewModel @Inject constructor(
             initialValue = 150
         )
 
+    /** 是否忽略播放页的蓝牙链路延迟警告提示。 */
+    val hideSinkLatencyHint: StateFlow<Boolean> = settingsRepository.hideSinkLatencyHint
+
+    fun setHideSinkLatencyHint(hidden: Boolean) {
+        viewModelScope.launch { settingsRepository.saveHideSinkLatencyHint(hidden) }
+    }
+
     fun startScan() = discoveryRepository.startScan()
     fun stopScan() = discoveryRepository.stopScan()
 

@@ -29,6 +29,7 @@ private val KEY_AUTO_RECONNECT_LEGACY = stringPreferencesKey("auto_reconnect") /
 private val KEY_PROTOCOL = stringPreferencesKey("protocol")
 private val KEY_TARGET_BITRATE = intPreferencesKey("target_bitrate")
 private val KEY_LATENCY_MODE = intPreferencesKey("latency_mode")
+private val KEY_HIDE_SINK_LATENCY_HINT = booleanPreferencesKey("hide_sink_latency_hint")
 
 /**
  * 持久化设置仓库实现。
@@ -61,6 +62,10 @@ class SettingsRepositoryImpl @Inject constructor(
     override val latencyMode: StateFlow<Int> = dataStore.data
         .map { prefs -> prefs[KEY_LATENCY_MODE] ?: DEFAULT_LATENCY_MODE }
         .stateIn(appScope, SharingStarted.Eagerly, DEFAULT_LATENCY_MODE)
+
+    override val hideSinkLatencyHint: StateFlow<Boolean> = dataStore.data
+        .map { prefs -> prefs[KEY_HIDE_SINK_LATENCY_HINT] ?: false }
+        .stateIn(appScope, SharingStarted.Eagerly, false)
 
     override val preferredProtocol: Flow<Protocol> = dataStore.data
         .map { prefs -> Protocol.fromWire(prefs[KEY_PROTOCOL]) }
@@ -96,6 +101,12 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun saveLatencyMode(mode: Int) {
         dataStore.edit { prefs ->
             prefs[KEY_LATENCY_MODE] = mode
+        }
+    }
+
+    override suspend fun saveHideSinkLatencyHint(hidden: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[KEY_HIDE_SINK_LATENCY_HINT] = hidden
         }
     }
 

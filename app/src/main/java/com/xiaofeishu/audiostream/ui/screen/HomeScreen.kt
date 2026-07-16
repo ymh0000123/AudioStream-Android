@@ -11,15 +11,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
 import com.xiaofeishu.audiostream.ui.component.ServerCard
@@ -43,8 +47,11 @@ fun HomeScreen(
     val servers by viewModel.servers.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
 
-    // 进入页面自动扫描一次
-    LaunchedEffect(Unit) { viewModel.startScan() }
+    // 自动搜索跟随页面可见性：进入/回前台开始，离开/退后台停止（释放组播锁省电）
+    LifecycleResumeEffect(Unit) {
+        viewModel.startScan()
+        onPauseOrDispose { viewModel.stopScan() }
+    }
 
     var showDialog by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
@@ -69,14 +76,22 @@ fun HomeScreen(
         ) {
             Text(
                 text = when {
-                    isScanning -> "正在扫描服务器…"
-                    servers.isEmpty() -> "未发现服务器"
-                    else -> "发现的服务器 (${servers.size})"
+                    servers.isNotEmpty() -> "发现的服务器 (${servers.size})"
+                    isScanning -> "正在搜索服务器…"
+                    else -> "未发现服务器"
                 },
                 style = MaterialTheme.typography.titleMedium
             )
-            if (isScanning) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (isScanning) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                IconButton(onClick = { viewModel.startScan() }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
+                }
             }
         }
 
@@ -106,7 +121,7 @@ fun HomeScreen(
                 onClick = { viewModel.startScan() },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("刷新扫描")
+                Text("重新扫描")
             }
             Spacer(modifier = Modifier.weight(1f))
         }

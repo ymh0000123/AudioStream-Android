@@ -32,7 +32,9 @@ class WebSocketProtocol(
     override val isConnected: Boolean get() = _isConnected
 
     override suspend fun connect(address: String, port: Int, initialBitrate: Int?): Flow<AudioEvent> = callbackFlow {
-        val url = "ws://$address:$port/ws"
+        // IPv6 字面量在 URL 中必须加方括号（mDNS 发现可能只通告 IPv6 地址）
+        val host = if (address.contains(':') && !address.startsWith("[")) "[$address]" else address
+        val url = "ws://$host:$port/ws"
         val request = Request.Builder().url(url).build()
         val handshakeCompleted = AtomicBoolean(false)
         // 帧计数：区分“reader 5 分钟没收到任何帧（socket 实际不通）”与“收到了文本/控制帧但无二进制音频帧（服务端没推音频流）”
