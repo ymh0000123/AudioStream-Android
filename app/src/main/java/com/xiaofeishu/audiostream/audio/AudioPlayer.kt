@@ -9,8 +9,15 @@ import android.os.Build
 import android.os.SystemClock
 import com.xiaofeishu.audiostream.domain.model.AudioFormat as StreamFormat
 
+/**
+ * [bufferCapacityMs] 是 AudioTrack 缓冲的**容量**下限，不是延迟：实际延迟取决于其中
+ * 积压多少未播 PCM（written - head），由上层水位控制。容量给足只是让抖动缓冲有地方涨，
+ * 不会抬高稳态延迟；容量不足则水位物理上涨不上去，欠载后必然反复断音。
+ */
 class AudioPlayer(
-    private val lowLatency: Boolean = true
+    private val lowLatency: Boolean = false,
+    private val bufferCapacityMs: Int = DEFAULT_BUFFER_CAPACITY_MS,
+    startThresholdMs: Int = DEFAULT_START_THRESHOLD_MS
 ) {
 
     fun interface WriteErrorListener {
@@ -25,6 +32,10 @@ class AudioPlayer(
     )
 
     var writeErrorListener: WriteErrorListener? = null
+
+    /** 起播/欠载恢复门槛（ms）。外部可通过 setStartThresholdMs 动态调整。 */
+    @Volatile var startThresholdMs: Int = startThresholdMs.coerceAtLeast(MIN_START_THRESHOLD_MS)
+        private set
 
     private var audioTrack: AudioTrack? = null
     private var _isPlaying = false
@@ -90,7 +101,11 @@ class AudioPlayer(
         val bufferedMs = ((writtenFrames - headFrames + backlogFrames) * 1000 / format.sampleRate).toInt()
 
         if (bufferedMs > catchupThresholdMs && pcmData.size >= format.bytesPerFrame) {
-            val framesToSkip = ((bufferedMs - catchupThresholdMs) * format.sampleRate / 1000).toInt()
+            // 单包跳帧限幅：漂移积压每 20ms 只涨亚毫秒，限到 ~3ms/包即可边收边消、永不触大跳；
+            // 瞬时抖动积压则跨多个包软追赶，避免一刀切掉几十 ms 造成的可听断音。
+            val excessMs = bufferedMs - catchupThresholdMs
+            val skipMs = minOf(excessMs, MAX_SKIP_MS_PER_PACKET)
+            val framesToSkip = (skipMs * format.sampleRate / 1000).toInt()
             val bytesToSkip = (framesToSkip * format.bytesPerFrame)
                 .coerceAtMost(pcmData.size - format.bytesPerFrame)
                 .let { it - (it % format.bytesPerFrame) }
@@ -265,12 +280,12 @@ class AudioPlayer(
             channelConfig,
             encoding
         )
-        // 低延迟优先：取系统建议下限，仅在不低于 20ms 的安全下限时使用。
-        // 旧的 100ms 下限叠加 getMinBufferSize() 会在部分设备产生 200-400ms 延迟，
-        // 20ms 足以覆盖大多数设备最小缓冲需求，配合 PERFORMANCE_MODE_LOW_LATENCY 生效。
-        val safeFloorBytes = (format.sampleRate * format.bytesPerFrame * 20L / 1000).toInt()
-            .coerceAtLeast(1)
-        val bufferSize = minBufferSize.coerceAtLeast(safeFloorBytes)
+        // 容量按 bufferCapacityMs 给足（不是延迟，见类注释）：旧实现取 20ms 下限，
+        // track 物理上装不下抖动缓冲，任何一次欠载后水位都被钉死在起播门槛附近，
+        // 且实时流 in=out 永远涨不回来——表现为"一顿一顿且延迟贴着 20ms"。
+        val capacityBytes = (format.sampleRate.toLong() * format.bytesPerFrame *
+            bufferCapacityMs / 1000).toInt().coerceAtLeast(1)
+        val bufferSize = maxOf(minBufferSize, capacityBytes)
 
         val audioFormat = AndroidAudioFormat.Builder()
             .setSampleRate(format.sampleRate)
@@ -298,10 +313,8 @@ class AudioPlayer(
             runCatching { track.release() }
             throw IllegalStateException("AudioTrack 初始化失败")
         }
-        if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val startThresholdFrames = (format.sampleRate * START_THRESHOLD_MS / 1000)
-                .coerceIn(1, track.bufferCapacityInFrames.coerceAtLeast(1))
-            runCatching { track.setStartThresholdInFrames(startThresholdFrames) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            applyStartThreshold(track, format)
         }
         android.util.Log.i(
             "AudioStreamTrack",
@@ -315,6 +328,38 @@ class AudioPlayer(
         )
         return track
     }
+
+    /**
+     * API 31+: 设置起播门槛。MODE_STREAM 下 AudioTrack 在写入量达到此值后才开始播放，
+     * 欠载后也会等重新攒到此量再恢复——这就是"重蓄水"的核心杠杆。
+     * 门槛太小（旧 20ms）→ 欠载后立刻开播 → 立刻又空 → 反复断音。
+     */
+    @android.annotation.SuppressLint("NewApi")
+    private fun applyStartThreshold(track: AudioTrack, format: StreamFormat) {
+        val thresholdFrames = (format.sampleRate.toLong() * startThresholdMs / 1000)
+            .coerceIn(1, track.bufferCapacityInFrames.toLong().coerceAtLeast(1))
+            .toInt()
+        runCatching { track.setStartThresholdInFrames(thresholdFrames) }
+    }
+
+    /**
+     * 运行时动态调整起播门槛（自适应缓冲的核心）。
+     * 上层检测到 underrun 时调高,平稳后调低,不需要重建 track。
+     */
+    fun setStartThresholdMs(ms: Int) {
+        startThresholdMs = ms.coerceAtLeast(MIN_START_THRESHOLD_MS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val track = audioTrack ?: return
+            val format = currentFormat ?: return
+            applyStartThreshold(track, format)
+        }
+    }
+
+    /**
+     * 自 track 创建以来的累计欠载次数。API 24+ 可用（minSdk 26 满足）。
+     * 返回 null 表示 track 不存在。上层据此判断是否需要扩大缓冲水位。
+     */
+    fun underrunCount(): Int? = runCatching { audioTrack?.underrunCount }.getOrNull()
 
     private fun recoverTrack(): Boolean {
         if (released) return false
@@ -444,7 +489,12 @@ class AudioPlayer(
         private const val WRITE_RETRY_DELAY_MS = 2L
         private const val STALL_CHECK_INTERVAL_MS = 1_000L
         private const val PLAYBACK_STALL_MS = 3_000L
-        private const val START_THRESHOLD_MS = 20
+        private const val DEFAULT_START_THRESHOLD_MS = 60
+        private const val MIN_START_THRESHOLD_MS = 10
+        private const val DEFAULT_BUFFER_CAPACITY_MS = 300
+        /** 单包跳帧上限（ms）：把"攒到阈值再一刀切"的硬纠正摊成每包亚可察觉的微跳，
+         *  边收漂移边消化，避免一次丢几十 ms 的可听断音。 */
+        private const val MAX_SKIP_MS_PER_PACKET = 3
         private const val MAX_TRACK_LIFETIME_MS = 2 * 60 * 60 * 1000L
         private const val PLAYBACK_HEAD_MASK = 0xffffffffL
         private const val PLAYBACK_HEAD_WRAP = 1L shl 32

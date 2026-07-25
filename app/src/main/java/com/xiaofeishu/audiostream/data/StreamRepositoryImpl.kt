@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
@@ -81,18 +82,18 @@ class StreamRepositoryImpl @Inject constructor(
         appScope.launch {
             settingsRepository.autoReconnect.collect { enabled ->
                 autoReconnectEnabled = enabled
-                _state.value = _state.value.copy(autoReconnect = enabled)
+                _state.update { it.copy(autoReconnect = enabled) }
             }
         }
         // 跟随音量设置并应用到播放器
         appScope.launch {
             settingsRepository.volume.collect { vol ->
-                _state.value = _state.value.copy(volume = vol)
+                _state.update { it.copy(volume = vol) }
             }
         }
         appScope.launch {
             settingsRepository.targetBitrate.collect { bitrate ->
-                _state.value = _state.value.copy(currentBitrate = bitrate)
+                _state.update { it.copy(currentBitrate = bitrate) }
             }
         }
     }
@@ -103,14 +104,14 @@ class StreamRepositoryImpl @Inject constructor(
         localPlaybackAllowed = true
         lastAudioDataAtMs = 0L
         lastServerActivityAtMs = 0L
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.CONNECTING,
             server = server,
             receivedBytes = 0L,
             error = null,
             reconnectAttempt = 0,
             stats = StreamStats()
-        )
+        ) }
         // 记录历史
         appScope.launch {
             settingsRepository.addConnection(
@@ -140,7 +141,7 @@ class StreamRepositoryImpl @Inject constructor(
         collectJob = appScope.launch {
             try {
                 val targetBitrate = settingsRepository.loadTargetBitrate()
-                _state.value = _state.value.copy(currentBitrate = targetBitrate)
+                _state.update { it.copy(currentBitrate = targetBitrate) }
                 // 协议层已有握手超时（WebSocket handshakeTimeout），
                 // 会及时 emit Error/Disconnected 事件，此处 collect 只需正常分发。
                 protocol.connect(server.address, server.port, targetBitrate).collect { event ->
@@ -167,7 +168,7 @@ class StreamRepositoryImpl @Inject constructor(
 
     private fun onConnected(server: ServerInfo, event: AudioEvent.Connected) {
         teardownPlayer()
-        val player = playerFactory.create()
+        val player = playerFactory.create(settingsRepository.latencyMode.value)
         player.initialize(event.format)
         player.setVolume(_state.value.volume)
         player.writeErrorListener = AudioPlayer.WriteErrorListener { errorCode, _ ->
@@ -188,14 +189,14 @@ class StreamRepositoryImpl @Inject constructor(
         // maybeReconnect 的起点。不清零的话历史重连次数会一直累积，退避永远停在 8s 封顶
         // ——表现为每次看门狗断开后都要等满 8 秒才重连。
         currentAttempt = 0
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.CONNECTED,
             audioFormat = event.format,
             server = server,
             currentBitrate = targetBitrate,
             error = null,
             reconnectAttempt = 0
-        )
+        ) }
         appScope.launch {
             delay(STATE_REFRESH_DELAY_MS)
             if (activeProtocol?.isConnected == true) {
@@ -234,11 +235,11 @@ class StreamRepositoryImpl @Inject constructor(
                     collectJob?.cancel()
                     reconnectJob?.cancel()
                     teardownPlayer()
-                    _state.value = _state.value.copy(
+                    _state.update { it.copy(
                         connectionState = ConnectionState.DISCONNECTED,
                         error = "连接失活（${WATCHDOG_STALL_MS / 1000} 秒未收到服务端数据）",
                         mediaState = null
-                    )
+                    ) }
                     maybeReconnect(server, attempt)
                     return@launch
                 }
@@ -256,20 +257,20 @@ class StreamRepositoryImpl @Inject constructor(
         if (localPlaybackAllowed) {
             enqueueAudio(event.data)
         }
-        val received = _state.value.receivedBytes + event.data.size
         val stats = computeStats(now)
-        val currentMediaState = _state.value.mediaState
         val streamPlaying = localPlaybackAllowed && player.isPlaying
-        _state.value = _state.value.copy(
-            connectionState = if (streamPlaying) ConnectionState.PLAYING else _state.value.connectionState,
-            receivedBytes = received,
-            stats = stats,
-            mediaState = if (streamPlaying) {
-                currentMediaState?.copy(playing = true) ?: MediaState(playing = true)
-            } else {
-                currentMediaState
-            }
-        )
+        _state.update { s ->
+            s.copy(
+                connectionState = if (streamPlaying) ConnectionState.PLAYING else s.connectionState,
+                receivedBytes = s.receivedBytes + event.data.size,
+                stats = stats,
+                mediaState = if (streamPlaying) {
+                    s.mediaState?.copy(playing = true) ?: MediaState(playing = true)
+                } else {
+                    s.mediaState
+                }
+            )
+        }
     }
 
     // 断开/出错的重连起点统一读 currentAttempt：onConnected 成功后会清零，
@@ -279,11 +280,11 @@ class StreamRepositoryImpl @Inject constructor(
         watchdogJob?.cancel()
         teardownPlayer()
         android.util.Log.w("AudioStreamRepo", "onDisconnected: $reason ${idleDiagnostic()}")
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.DISCONNECTED,
             error = reason.ifBlank { "连接已断开" },
             mediaState = null
-        )
+        ) }
         maybeReconnect(server, currentAttempt)
     }
 
@@ -292,11 +293,11 @@ class StreamRepositoryImpl @Inject constructor(
         teardownPlayer()
         val reason = error.message ?: error::class.java.simpleName
         android.util.Log.w("AudioStreamRepo", "onError: ${error::class.java.name}: $reason ${idleDiagnostic()}", error)
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.ERROR,
             error = reason,
             mediaState = null
-        )
+        ) }
         maybeReconnect(server, currentAttempt)
     }
 
@@ -322,11 +323,11 @@ class StreamRepositoryImpl @Inject constructor(
         // 保留上次断连原因，仅追加重连进度，便于定位“锁屏长播断连”根因
         // （旧逻辑直接覆盖成“重连中…”，真实异常被吞，无法诊断）。
         val prevReason = _state.value.error ?: "连接已断开"
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.CONNECTING,
             error = "$prevReason（重连中第 $nextAttempt 次，${delayMs / 1000}s 后重试）",
             reconnectAttempt = nextAttempt
-        )
+        ) }
         reconnectJob?.cancel()
         reconnectJob = appScope.launch {
             delay(delayMs)
@@ -346,7 +347,7 @@ class StreamRepositoryImpl @Inject constructor(
         collectJob?.cancel()
         activeProtocol = null
         teardownPlayer()
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = ConnectionState.DISCONNECTED,
             audioFormat = null,
             receivedBytes = 0L,
@@ -354,7 +355,7 @@ class StreamRepositoryImpl @Inject constructor(
             error = null,
             reconnectAttempt = 0,
             mediaState = null
-        )
+        ) }
     }
 
     override fun sendCommand(action: MediaAction) {
@@ -390,21 +391,20 @@ class StreamRepositoryImpl @Inject constructor(
 
     override fun setVolume(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
-        _state.value = _state.value.copy(volume = clamped)
+        _state.update { it.copy(volume = clamped) }
         currentPlayer?.setVolume(clamped)
         appScope.launch { settingsRepository.saveVolume(clamped) }
     }
 
     override fun setAutoReconnect(enabled: Boolean) {
         autoReconnectEnabled = enabled
-        _state.value = _state.value.copy(autoReconnect = enabled)
+        _state.update { it.copy(autoReconnect = enabled) }
         appScope.launch { settingsRepository.saveAutoReconnect(enabled) }
     }
 
     override fun setBitrate(bitrate: Int) {
         val normalized = normalizeTargetBitrate(bitrate)
         activeProtocol?.setBitrate(normalized)
-        _state.value = _state.value.copy(currentBitrate = normalized)
         appScope.launch { settingsRepository.saveTargetBitrate(normalized) }
     }
 
@@ -432,12 +432,11 @@ class StreamRepositoryImpl @Inject constructor(
                 startPlaybackQueue(player, event.format)
             }
         }
-        _state.value = _state.value.copy(
-            audioFormat = event.format,
-            currentBitrate = event.bitrate
-        )
-        // 仅在用户主动 setBitrate 时持久化，服务端单方降速不写回 DataStore，
-        // 避免临时降速永久拉低下次连接的起步码率。
+        // currentBitrate 只反映用户意图（持久化在 DataStore 里的目标码率），不被服务端事件覆盖。
+        // 旧逻辑把 event.bitrate 写入 state 但不写 DataStore，导致 StateFlow 去重后 init
+        // collector 无法纠正——用户切页回来看到的是服务端值（常为 1536 默认），不是自己设的值。
+        // 实际编码码率从 audioFormat + stats.bitrateKbps 可观测，slider 应展示目标值。
+        _state.update { it.copy(audioFormat = event.format) }
     }
 
     private fun sameFormat(a: com.xiaofeishu.audiostream.domain.model.AudioFormat, b: com.xiaofeishu.audiostream.domain.model.AudioFormat): Boolean =
@@ -456,17 +455,17 @@ class StreamRepositoryImpl @Inject constructor(
         syncPlayerPlayback(localPlaybackAllowed)
         val hasRecentAudio = System.currentTimeMillis() - lastAudioDataAtMs <= STREAM_ACTIVE_GRACE_MS
         val effectivePlaying = localPlaybackAllowed && (mediaState.playing || hasRecentAudio)
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = if (effectivePlaying) ConnectionState.PLAYING else ConnectionState.CONNECTED,
             mediaState = mediaState.copy(playing = effectivePlaying)
-        )
+        ) }
     }
 
     private fun updateLocalMediaState(playing: Boolean) {
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             connectionState = if (playing) ConnectionState.PLAYING else ConnectionState.CONNECTED,
-            mediaState = _state.value.mediaState?.copy(playing = playing) ?: MediaState(playing = playing)
-        )
+            mediaState = it.mediaState?.copy(playing = playing) ?: MediaState(playing = playing)
+        ) }
     }
 
     private fun syncPlayerPlayback(playing: Boolean) {
@@ -497,20 +496,32 @@ class StreamRepositoryImpl @Inject constructor(
         )
         playbackQueue = PlaybackQueue(queue, queuedBytes)
         playbackJob = appScope.launch(playbackDispatcher) {
-            // 积压回落：以 TRIM_WINDOW_MS 为周期跟踪"总积压（track 未播 + 队列）的窗口最小值"。
-            // 实时流到达速率=消耗速率，卡顿/突发留下的积压既不会再涨（写入阻塞封顶）也不会
-            // 自行回落（消耗恒为实时），表现为"卡顿一下延迟就永久升高"。窗口最小值减目标水位
-            // 是整个窗口内从未被到达抖动消耗过的净冗余，按此量丢弃最旧输入不会引发新欠载。
+            // ════════════════════════════════════════════════════════════════════
+            // 自适应水位：用 AudioTrack.getUnderrunCount() 做反馈
+            // ════════════════════════════════════════════════════════════════════
+            // 核心思路：平时贴着低延迟跑（startThreshold = 档位初始值），一旦检测到新欠载，
+            // 就抬高 startThreshold（让 track 欠载后攒更多再起播，吸收抖动），同时通知
+            // playWithCatchup 的目标水位同步上移（不要把刚蓄的缓冲又削回去）。
+            // 一段时间无新欠载则逐步降回初始值——做到"能低延迟时低延迟，该扛抖动时扛得住"。
             //
-            // 低点必须在"接收阻塞"上测，不能只在有包时采样：成簇到达（WiFi 省电/蓝牙共存很
-            // 典型）时，簇间空隙里本循环阻塞在 receive 上无样本，track 水位一路下探才是真实
-            // 低点；簇落地后再采样看到的是"track 放空+队列灌满"，会严重高估可丢弃量，把空隙
-            // 刚需的抖动缓冲丢掉，造成周期性欠载断音。低点样本仅在"迭代结束时队列已空"时合成
-            // （此时总积压=track 水位且按实时下降）：队列非空的迭代间隙只是调度抖动，若也按
-            // "track 水位-间隔"合成会把满队列稳态误标成低水位，回落将永远不触发。
-            //
-            // 跳帧档（threshold>0）由 playWithCatchup 主动收敛到档位值，此机制天然不触发，
-            // 实际服务于"禁用跳帧"档：不再只靠 24 包 DROP_OLDEST 封顶、升上去回不来。
+            // 为什么不直接暂停出队等蓄水？因为 MODE_STREAM 的 startThreshold 已经提供了
+            // 欠载重蓄水语义（写入量不够门槛时 track 自动静音等待），比应用层暂停更精确、
+            // 不引入额外调度延迟。应用层只需要在检测到欠载时把门槛调高就行。
+            val baseThresholdMs = player.startThresholdMs  // 档位初始值
+            val maxThresholdMs = when (latencyMode) {
+                100 -> 120   // 低延迟档：上限不超过平衡档初始值
+                150 -> 150   // 平衡档：与档位值持平
+                200 -> 200   // 稳定档
+                else -> 160  // 禁用跳帧
+            }
+            var adaptiveThresholdMs = baseThresholdMs
+            var lastUnderrunCount = player.underrunCount() ?: 0
+            var lastUnderrunCheckMs = SystemClock.elapsedRealtime()
+            var stableStreakMs = 0L  // 无新欠载的连续时长
+
+            // ════════════════════════════════════════════════════════════════════
+            // 积压回落（保留，目标水位跟随自适应阈值）
+            // ════════════════════════════════════════════════════════════════════
             var trimWindowStartMs = 0L
             var trimWindowMinMs = Int.MAX_VALUE
             var trimBytesRemaining = 0L
@@ -530,10 +541,14 @@ class StreamRepositoryImpl @Inject constructor(
                 for (data in queue) {
                     try {
                         if (!localPlaybackAllowed) {
-                            // 本地暂停期间队列被持续丢弃且 track 已释放，窗口样本失效
                             trimWindowStartMs = 0L
                             trimBytesRemaining = 0L
                             iterEndAtMs = 0L
+                            // 暂停期间重置自适应状态，恢复后从基准重新探测
+                            adaptiveThresholdMs = baseThresholdMs
+                            player.setStartThresholdMs(baseThresholdMs)
+                            lastUnderrunCount = player.underrunCount() ?: 0
+                            stableStreakMs = 0L
                             continue
                         }
                         if (trimBytesRemaining >= data.size) {
@@ -543,15 +558,46 @@ class StreamRepositoryImpl @Inject constructor(
                         trimBytesRemaining = 0L
                         if (!player.isPlaying) player.resume()
                         val threshold = settingsRepository.latencyMode.value
+
+                        // ── 自适应水位更新（每包检测，代价仅 1 次 JNI 调用） ──
                         if (format.bytesPerFrame > 0 && format.sampleRate > 0) {
                             val nowMs = SystemClock.elapsedRealtime()
+                            val currentUnderruns = player.underrunCount() ?: lastUnderrunCount
+                            val elapsed = nowMs - lastUnderrunCheckMs
+                            if (currentUnderruns > lastUnderrunCount) {
+                                // 检测到新欠载：立即抬高门槛
+                                val boost = ADAPTIVE_BOOST_MS * (currentUnderruns - lastUnderrunCount)
+                                    .coerceAtMost(3)  // 单次最多抬 3 步，防暴涨
+                                adaptiveThresholdMs = min(adaptiveThresholdMs + boost, maxThresholdMs)
+                                player.setStartThresholdMs(adaptiveThresholdMs)
+                                stableStreakMs = 0L
+                                android.util.Log.i("AudioStreamAdaptive",
+                                    "欠载 +${currentUnderruns - lastUnderrunCount}，" +
+                                        "startThreshold 升至 ${adaptiveThresholdMs}ms " +
+                                        "(基准=${baseThresholdMs}ms 上限=${maxThresholdMs}ms)")
+                                lastUnderrunCount = currentUnderruns
+                            } else if (adaptiveThresholdMs > baseThresholdMs) {
+                                // 无新欠载：累计稳定时长，超过冷却期后逐步回降
+                                stableStreakMs += elapsed
+                                if (stableStreakMs >= ADAPTIVE_COOLDOWN_MS) {
+                                    adaptiveThresholdMs = max(
+                                        adaptiveThresholdMs - ADAPTIVE_DECAY_MS,
+                                        baseThresholdMs
+                                    )
+                                    player.setStartThresholdMs(adaptiveThresholdMs)
+                                    stableStreakMs = 0L
+                                    android.util.Log.d("AudioStreamAdaptive",
+                                        "稳定 ${ADAPTIVE_COOLDOWN_MS / 1000}s，" +
+                                            "startThreshold 降至 ${adaptiveThresholdMs}ms")
+                                }
+                            }
+                            lastUnderrunCheckMs = nowMs
+
+                            // ── 积压回落（目标水位跟随自适应阈值） ──
                             if (trimWindowStartMs == 0L) {
                                 trimWindowStartMs = nowMs
                                 trimWindowMinMs = Int.MAX_VALUE
                             }
-                            // 低点样本：仅当上一迭代结束时队列已空，到本次唤醒之间 receive 才是
-                            // 在空队列上等待，总积压 = 迭代结束时 track 水位按实时消耗 blockedMs。
-                            // 队列非空的迭代间隙只是调度抖动，按此合成会把满队列稳态误标成低水位。
                             if (iterEndAtMs > 0L && iterEndQueueEmpty) {
                                 val blockedMs = (nowMs - iterEndAtMs).toInt()
                                 if (blockedMs > 0) {
@@ -559,8 +605,6 @@ class StreamRepositoryImpl @Inject constructor(
                                     trimWindowMinMs = min(trimWindowMinMs, dipMs)
                                 }
                             }
-                            // 流动态样本：排除当前包（它即将写入，不属于"排队冗余"；
-                            // 计入会让稳态最小值虚高约一包，跳帧档下每窗口切一刀出咔哒声）
                             val queuedFrames = (queuedBytes.get() - data.size).coerceAtLeast(0L) /
                                 format.bytesPerFrame
                             val steadyMs = trackLagMsNow() +
@@ -568,28 +612,36 @@ class StreamRepositoryImpl @Inject constructor(
                                     .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                             trimWindowMinMs = min(trimWindowMinMs, steadyMs)
                             if (nowMs - trimWindowStartMs >= TRIM_WINDOW_MS) {
-                                val targetMs = if (threshold > 0) threshold else TRIM_FLOOR_DISABLED_MS
+                                // 回落目标跟随自适应阈值：不能把自适应刚蓄的缓冲又削回去
+                                val targetMs = if (threshold > 0) {
+                                    max(threshold, adaptiveThresholdMs)
+                                } else {
+                                    max(TRIM_FLOOR_DISABLED_MS, adaptiveThresholdMs)
+                                }
                                 val excessMs = trimWindowMinMs - targetMs
-                                // 门槛 2 包起：采样噪声不值得为几十毫秒切一刀
                                 if (excessMs >= TRIM_MIN_EXCESS_MS) {
-                                    trimBytesRemaining = excessMs.toLong() *
+                                    // 单次清理限幅：catchup 已按 3ms/包持续消化漂移，
+                                    // trim 只兜底真实严重积压；一次清太多会丢整包 = 可听空洞。
+                                    val trimMs = minOf(excessMs, TRIM_MAX_PER_CYCLE_MS)
+                                    trimBytesRemaining = trimMs.toLong() *
                                         format.sampleRate / 1000 * format.bytesPerFrame
                                     android.util.Log.i("AudioStreamRepo",
                                         "积压回落：${TRIM_WINDOW_MS / 1000}s 窗口最小积压 ${trimWindowMinMs}ms " +
-                                            "超出目标 ${targetMs}ms，丢弃 ${excessMs}ms 陈旧音频")
+                                            "超出目标 ${targetMs}ms，本轮丢弃 ${trimMs}ms（超出量 ${excessMs}ms）")
                                 }
                                 trimWindowStartMs = nowMs
                                 trimWindowMinMs = Int.MAX_VALUE
                             }
                         }
+
                         if (threshold > 0) {
-                            // 本包已出队，queuedBytes 里扣除本包后即"仍排在后面"的积压
+                            // catchup 目标水位也跟随自适应阈值：取 max(档位值, 当前自适应门槛)
+                            val effectiveThreshold = max(threshold, adaptiveThresholdMs)
                             val pendingBytes = (queuedBytes.get() - data.size).coerceAtLeast(0L)
-                            player.playWithCatchup(data, format, threshold, pendingBytes)
+                            player.playWithCatchup(data, format, effectiveThreshold, pendingBytes)
                         } else {
                             player.play(data)
                         }
-                        // 写入完成后记录 track 水位/队列是否已空/时刻，供下次唤醒合成低点样本
                         iterEndTrackLagMs = trackLagMsNow()
                         iterEndQueueEmpty = (queuedBytes.get() - data.size) <= 0L
                         iterEndAtMs = SystemClock.elapsedRealtime()
@@ -718,7 +770,7 @@ class StreamRepositoryImpl @Inject constructor(
         private const val WATCHDOG_CHECK_MS = 1_000L
 
         /** 积压回落观察窗口：窗口内总积压最小值减目标水位 = 从未被抖动消耗的净冗余，可安全丢弃。 */
-        private const val TRIM_WINDOW_MS = 8_000L
+        private const val TRIM_WINDOW_MS = 4_000L
 
         /** 禁用跳帧档的回落目标水位（ms）：保留可观抖动余量，只清除卡顿留下的永久积压。 */
         private const val TRIM_FLOOR_DISABLED_MS = 160
@@ -726,14 +778,27 @@ class StreamRepositoryImpl @Inject constructor(
         /** 回落执行门槛（ms，2 包）：低于此值的"冗余"属采样噪声，切割只会产生咔哒声。 */
         private const val TRIM_MIN_EXCESS_MS = 40
 
-        /** 播放队列容量（包，每包 20ms）。100/150/200 档配合跳帧追赶取小容量；
-         *  0（禁用跳帧）档不主动追赶，用大容量降低丢帧概率：溢出时丢最旧兜底，
-         *  卡顿留下的持久积压由窗口最小积压回落机制清除（见 startPlaybackQueue）。 */
+        /** 单次回落清理上限（ms）：catchup 已按 3ms/包消化漂移，trim 仅兜底严重积压且每轮只清一小截，
+         *  避免一次丢整包造成的可听空洞；剩余积压留待下一窗口继续。 */
+        private const val TRIM_MAX_PER_CYCLE_MS = 60
+
+        /** 自适应水位：检测到欠载时单步抬高的门槛量（ms）。约 2 个包，够吸收一次典型抖动。 */
+        private const val ADAPTIVE_BOOST_MS = 40
+
+        /** 自适应水位：无新欠载达此时长后开始回降，避免一抖就长期停在高延迟。 */
+        private const val ADAPTIVE_COOLDOWN_MS = 5_000L
+
+        /** 自适应水位：每次回降步长（ms）。比 BOOST 小，遵循"快升慢降"避免震荡。 */
+        private const val ADAPTIVE_DECAY_MS = 40
+
+        /** 播放队列容量（包，每包 ~20ms）。按 AudioTrack 缓冲容量覆盖目标的 1.5 倍给，
+         *  确保队列 + track 合起来能装下自适应水位的上限。容量给足不影响延迟（延迟由
+         *  水位控制），但容量不足会让水位物理上涨不上去，欠载后无法重蓄水。 */
         private fun audioQueueCapacity(latencyMode: Int): Int = when (latencyMode) {
-            100 -> 2
-            150 -> 4
-            200 -> 6
-            else -> 24
+            100 -> 15   // 200ms cap / 20ms ≈ 10, ×1.5 = 15
+            150 -> 22   // 300ms / 20ms = 15, ×1.5 = 22
+            200 -> 30   // 400ms / 20ms = 20, ×1.5 = 30
+            else -> 38  // 500ms / 20ms = 25, ×1.5 ≈ 38
         }
 
         private fun normalizeTargetBitrate(bitrate: Int): Int {

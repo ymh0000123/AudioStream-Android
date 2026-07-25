@@ -3,11 +3,26 @@ package com.xiaofeishu.audiostream.audio
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * 创建 [AudioPlayer]。每次连接需要一个新实例（AudioTrack 不可跨会话复用）。
- * lowLatency 默认开启，以最小化端到端缓冲延迟。
- */
 @Singleton
 class AudioPlayerFactory @Inject constructor() {
-    fun create(lowLatency: Boolean = true): AudioPlayer = AudioPlayer(lowLatency)
+    fun create(latencyMode: Int = 150): AudioPlayer {
+        val lowLatency = latencyMode == 100
+        val bufferCapacityMs = when (latencyMode) {
+            100 -> 200
+            150 -> 300
+            200 -> 400
+            else -> 500
+        }
+        val startThresholdMs = when (latencyMode) {
+            100 -> 40
+            150 -> 60
+            200 -> 80
+            else -> 60
+        }
+        return AudioPlayer(
+            lowLatency = lowLatency,
+            bufferCapacityMs = bufferCapacityMs,
+            startThresholdMs = startThresholdMs
+        )
+    }
 }
