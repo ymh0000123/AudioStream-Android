@@ -791,14 +791,15 @@ class StreamRepositoryImpl @Inject constructor(
         /** 自适应水位：每次回降步长（ms）。比 BOOST 小，遵循"快升慢降"避免震荡。 */
         private const val ADAPTIVE_DECAY_MS = 40
 
-        /** 播放队列容量（包，每包 ~20ms）。按 AudioTrack 缓冲容量覆盖目标的 1.5 倍给，
-         *  确保队列 + track 合起来能装下自适应水位的上限。容量给足不影响延迟（延迟由
-         *  水位控制），但容量不足会让水位物理上涨不上去，欠载后无法重蓄水。 */
+        /** 播放队列容量（包，每包 ~10ms——服务端按 WASAPI 10ms 周期分包）。
+         *  按 AudioTrack 缓冲容量覆盖目标的 1.5 倍给，确保队列 + track 合起来能装下
+         *  自适应水位的上限。容量给足不影响延迟（延迟由水位控制），但容量不足会让水位
+         *  物理上涨不上去，欠载后无法重蓄水。 */
         private fun audioQueueCapacity(latencyMode: Int): Int = when (latencyMode) {
-            100 -> 15   // 200ms cap / 20ms ≈ 10, ×1.5 = 15
-            150 -> 22   // 300ms / 20ms = 15, ×1.5 = 22
-            200 -> 30   // 400ms / 20ms = 20, ×1.5 = 30
-            else -> 38  // 500ms / 20ms = 25, ×1.5 ≈ 38
+            100 -> 30   // 200ms cap / 10ms = 20, ×1.5 = 30
+            150 -> 45   // 300ms / 10ms = 30, ×1.5 = 45
+            200 -> 60   // 400ms / 10ms = 40, ×1.5 = 60
+            else -> 75  // 500ms / 10ms = 50, ×1.5 = 75
         }
 
         private fun normalizeTargetBitrate(bitrate: Int): Int {
