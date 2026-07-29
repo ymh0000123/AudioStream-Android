@@ -100,6 +100,10 @@ class AudioPlayer(
         val backlogFrames = pendingBacklogBytes.coerceAtLeast(0L) / format.bytesPerFrame
         val bufferedMs = ((writtenFrames - headFrames + backlogFrames) * 1000 / format.sampleRate).toInt()
 
+        // 抽干方向的低水位线：低于它就在触底(underrun)前介入垫静音。取 catchupThresholdMs 之下
+        // 留一段死区（不高于其半值），避免与跳帧在同一水位来回打架；死区内缓冲自由浮动、不干预。
+        val lowWaterMs = minOf(LOW_WATER_MARK_MS, catchupThresholdMs / 2)
+
         if (bufferedMs > catchupThresholdMs && pcmData.size >= format.bytesPerFrame) {
             // 单包跳帧限幅：漂移积压每 20ms 只涨亚毫秒，限到 ~3ms/包即可边收边消、永不触大跳；
             // 瞬时抖动积压则跨多个包软追赶，避免一刀切掉几十 ms 造成的可听断音。
@@ -112,6 +116,18 @@ class AudioPlayer(
             if (bytesToSkip > 0) {
                 writeLoop(pcmData, bytesToSkip, pcmData.size - bytesToSkip)
                 return
+            }
+        } else if (bufferedMs < lowWaterMs) {
+            // 抽干方向镜像跳帧：捕获声卡快于本机 DAC 时缓冲被单向抽干，旧逻辑只能等真正
+            // underrun（AudioTrack 硬性插静音等待重蓄水）= 周期性可听"顿"、蓄满又"自己好"。
+            // 改为触底前每包垫 ≤3ms 静音，把 DAC 多消费的部分用听不见的微静音补上，
+            // 内容时间轴随之对齐 DAC 墙钟，永不触 underrun。与 catchup 完全对称：
+            // 一个每包丢一点、一个每包垫一点，双向连续消化任意方向的时钟漂移。
+            val deficitMs = lowWaterMs - bufferedMs
+            val padMs = minOf(deficitMs, MAX_PAD_MS_PER_PACKET)
+            val padFrames = padMs * format.sampleRate / 1000
+            if (padFrames > 0) {
+                writeSilenceFrames(padFrames, format)
             }
         }
         writeLoop(pcmData)
@@ -456,6 +472,23 @@ class AudioPlayer(
         }
     }
 
+    /**
+     * 写入 [frames] 帧静音，用于抽干方向的漂移补偿（见 playWithCatchup）。
+     * 8-bit PCM 在 AudioTrack 是无符号编码，静音电平是 0x80(128)——全 0 反而是最负峰值会爆音；
+     * 16-bit signed 与 32-bit float 的静音都是全 0 字节（ByteArray 默认值，无需填充）。
+     * 复用 writeLoop，故 totalWrittenBytes 一并累加，缓冲深度统计与后续判断自洽。
+     */
+    private fun writeSilenceFrames(
+        frames: Int,
+        format: com.xiaofeishu.audiostream.domain.model.AudioFormat
+    ) {
+        val bytesPerFrame = format.bytesPerFrame
+        if (bytesPerFrame <= 0 || frames <= 0) return
+        val silence = ByteArray(frames * bytesPerFrame)
+        if (format.bitsPerSample == 8) silence.fill(0x80.toByte())
+        writeLoop(silence)
+    }
+
     private fun currentOrRecoveredTrack(): AudioTrack? {
         if (released) return null
         val track = audioTrack
@@ -495,6 +528,13 @@ class AudioPlayer(
         /** 单包跳帧上限（ms）：把"攒到阈值再一刀切"的硬纠正摊成每包亚可察觉的微跳，
          *  边收漂移边消化，避免一次丢几十 ms 的可听断音。 */
         private const val MAX_SKIP_MS_PER_PACKET = 3
+        /** 单包静音填充上限（ms）：抽干方向镜像 MAX_SKIP_MS_PER_PACKET，触底前每包最多垫 3ms
+         *  静音，把单向漂移摊成不可察觉的微填充，替代可听的 underrun 断音。 */
+        private const val MAX_PAD_MS_PER_PACKET = 3
+        /** 抽干方向低水位线（ms）：缓冲深度低于此值即在 underrun 前介入垫静音。远高于 0 留出
+         *  约 2 包安全余量（每包可垫 3ms 远快于亚毫秒/包的漂移，足以稳稳托住），又远低于典型
+         *  catchup 阈值（≥100ms）以保证跳帧/填充之间有死区、不互相打架。 */
+        private const val LOW_WATER_MARK_MS = 40
         private const val MAX_TRACK_LIFETIME_MS = 2 * 60 * 60 * 1000L
         private const val PLAYBACK_HEAD_MASK = 0xffffffffL
         private const val PLAYBACK_HEAD_WRAP = 1L shl 32
