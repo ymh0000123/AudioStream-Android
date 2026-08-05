@@ -514,7 +514,11 @@ class StreamRepositoryImpl @Inject constructor(
                 200 -> 200   // 稳定档
                 else -> 160  // 禁用跳帧
             }
-            var adaptiveThresholdMs = baseThresholdMs
+            // 连接初期用低门槛(20ms)快速起播，避免 AudioTrack 长时间静音等缓冲。
+            // WARMUP_DURATION_MS 后自适应系统接管，或 warmup 到期自动恢复到稳态值。
+            val warmupStartMs = SystemClock.elapsedRealtime()
+            var adaptiveThresholdMs = WARMUP_START_THRESHOLD_MS
+            player.setStartThresholdMs(WARMUP_START_THRESHOLD_MS)
             var lastUnderrunCount = player.underrunCount() ?: 0
             var lastUnderrunCheckMs = SystemClock.elapsedRealtime()
             var stableStreakMs = 0L  // 无新欠载的连续时长
@@ -790,6 +794,12 @@ class StreamRepositoryImpl @Inject constructor(
 
         /** 自适应水位：每次回降步长（ms）。比 BOOST 小，遵循"快升慢降"避免震荡。 */
         private const val ADAPTIVE_DECAY_MS = 40
+
+        /** 连接初期起播门槛（ms）：在 WARMUP_DURATION_MS 内使用此值，快速出音。 */
+        private const val WARMUP_START_THRESHOLD_MS = 20
+
+        /** 连接初期持续时间（ms）：超时后若未检测到欠载，自动恢复到档位默认值。 */
+        private const val WARMUP_DURATION_MS = 5_000L
 
         /** 播放队列容量（包，每包 ~10ms——服务端按 WASAPI 10ms 周期分包）。
          *  按 AudioTrack 缓冲容量覆盖目标的 1.5 倍给，确保队列 + track 合起来能装下

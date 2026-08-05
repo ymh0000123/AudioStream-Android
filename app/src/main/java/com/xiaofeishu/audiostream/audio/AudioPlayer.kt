@@ -43,6 +43,10 @@ class AudioPlayer(
     private var currentFormat: StreamFormat? = null
     private var negotiatedTo: String? = null
     private var currentVolume: Float = 1f
+    private var lastWriteAtMs = 0L
+    /** 断流恢复淡入剩余帧数：距上次写入超过 [RECOVERY_FADE_GAP_MS] 后置为
+     *  一包时长，随后对写入数据头部做 0→1 线性增益，消除「静音→有声」阶跃爆音。 */
+    private var fadeInFramesRemaining = 0
     private var trackStartedAtMs: Long = 0L
     private var playbackHeadWraps: Long = 0L
     private var lastPlaybackHeadRaw: Long = 0L
@@ -61,6 +65,9 @@ class AudioPlayer(
     fun initialize(format: StreamFormat) {
         released = false
         releaseTrack()
+        // 新会话：清除上次会话的写入时间戳，避免首包误判为断流恢复
+        lastWriteAtMs = 0L
+        fadeInFramesRemaining = 0
         _isPlaying = false
         currentFormat = format
         negotiatedTo = null
@@ -72,6 +79,7 @@ class AudioPlayer(
     fun play(pcmData: ByteArray) {
         if (!_isPlaying) return
         recoverLongRunningTrackIfNeeded()
+        noteWriteAttempt()
         writeLoop(pcmData)
     }
 
@@ -94,6 +102,7 @@ class AudioPlayer(
             return
         }
         recoverLongRunningTrackIfNeeded()
+        noteWriteAttempt()
 
         val headFrames = playbackHeadPositionFrames()
         val writtenFrames = totalWrittenBytes / format.bytesPerFrame
@@ -427,10 +436,23 @@ class AudioPlayer(
     private fun writeLoop(
         pcmData: ByteArray,
         startOffset: Int = 0,
-        length: Int = pcmData.size - startOffset
+        length: Int = pcmData.size - startOffset,
+        applyFade: Boolean = true
     ) {
         var offset = startOffset
         val endOffset = (startOffset + length).coerceAtMost(pcmData.size)
+        // 断流恢复淡入：对本次写入的头部帧做 0→1 线性增益（仅真实数据，静音填充不消耗配额）。
+        if (applyFade && fadeInFramesRemaining > 0) {
+            val fmt = currentFormat
+            if (fmt != null && fmt.bytesPerFrame > 0) {
+                val totalFrames = (endOffset - offset) / fmt.bytesPerFrame
+                val fadeFrames = minOf(totalFrames, fadeInFramesRemaining)
+                if (fadeFrames > 0) {
+                    applyFadeIn(pcmData, offset, fadeFrames, fmt)
+                    fadeInFramesRemaining -= fadeFrames
+                }
+            }
+        }
         var zeroWriteCount = 0
         while (offset < endOffset) {
             val track = currentOrRecoveredTrack() ?: return
@@ -486,7 +508,79 @@ class AudioPlayer(
         if (bytesPerFrame <= 0 || frames <= 0) return
         val silence = ByteArray(frames * bytesPerFrame)
         if (format.bitsPerSample == 8) silence.fill(0x80.toByte())
-        writeLoop(silence)
+        writeLoop(silence, applyFade = false)
+    }
+
+    /** 距上次写入超过此间隔即视为断流（服务端静音/欠载恢复），对恢复包头部做淡入。 */
+    private fun noteWriteAttempt() {
+        val now = SystemClock.elapsedRealtime()
+        if (lastWriteAtMs > 0 && now - lastWriteAtMs >= RECOVERY_FADE_GAP_MS) {
+            val fmt = currentFormat
+            if (fmt != null && fmt.sampleRate > 0) {
+                fadeInFramesRemaining = fmt.sampleRate * RECOVERY_FADE_MS / 1000
+            }
+        }
+        lastWriteAtMs = now
+    }
+
+    /**
+     * 对 [data] 从 [startOffset] 起的前 [fadeFrames] 帧应用 0→1 线性淡入（原地修改）。
+     * 支持 8-bit 无符号 / 16-bit signed / 32-bit float 三种编码；每帧所有声道共享同一增益。
+     */
+    private fun applyFadeIn(
+        data: ByteArray,
+        startOffset: Int,
+        fadeFrames: Int,
+        format: StreamFormat
+    ) {
+        val bpf = format.bytesPerFrame
+        val channels = format.channels.coerceAtLeast(1)
+        when (format.bitsPerSample) {
+            16 -> {
+                for (f in 0 until fadeFrames) {
+                    val g = (f + 1).toFloat() / (fadeFrames + 1)
+                    val base = startOffset + f * bpf
+                    for (c in 0 until channels) {
+                        val i = base + c * 2
+                        val s = ((data[i].toInt() and 0xff) or (data[i + 1].toInt() shl 8)).toShort()
+                        val v = (s * g).toInt().coerceIn(-32768, 32767)
+                        data[i] = (v and 0xff).toByte()
+                        data[i + 1] = ((v shr 8) and 0xff).toByte()
+                    }
+                }
+            }
+            8 -> {
+                for (f in 0 until fadeFrames) {
+                    val g = (f + 1).toFloat() / (fadeFrames + 1)
+                    val base = startOffset + f * bpf
+                    for (c in 0 until channels) {
+                        val i = base + c
+                        val s = (data[i].toInt() and 0xff) - 128
+                        val v = (s * g).toInt().coerceIn(-128, 127) + 128
+                        data[i] = v.toByte()
+                    }
+                }
+            }
+            32 -> {
+                for (f in 0 until fadeFrames) {
+                    val g = (f + 1).toFloat() / (fadeFrames + 1)
+                    val base = startOffset + f * bpf
+                    for (c in 0 until channels) {
+                        val i = base + c * 4
+                        val bits = (data[i].toInt() and 0xff) or
+                            ((data[i + 1].toInt() and 0xff) shl 8) or
+                            ((data[i + 2].toInt() and 0xff) shl 16) or
+                            ((data[i + 3].toInt() and 0xff) shl 24)
+                        val v = Float.fromBits(bits) * g
+                        val ob = v.toRawBits()
+                        data[i] = (ob and 0xff).toByte()
+                        data[i + 1] = ((ob shr 8) and 0xff).toByte()
+                        data[i + 2] = ((ob shr 16) and 0xff).toByte()
+                        data[i + 3] = ((ob shr 24) and 0xff).toByte()
+                    }
+                }
+            }
+        }
     }
 
     private fun currentOrRecoveredTrack(): AudioTrack? {
@@ -524,6 +618,12 @@ class AudioPlayer(
         private const val PLAYBACK_STALL_MS = 3_000L
         private const val DEFAULT_START_THRESHOLD_MS = 60
         private const val MIN_START_THRESHOLD_MS = 10
+        /** 距上次写入超过此时长即视为断流（服务端静音跳过/网络欠载），恢复包头部做淡入，
+         *  消除 AudioTrack underrun 重蓄水后「静音→有声」恢复瞬间的阶跃爆音（click/pop）。
+         *  正常连续播放每包间隔约 10ms，200ms 阈值不会误触发。 */
+        private const val RECOVERY_FADE_GAP_MS = 200L
+        /** 断流恢复淡入时长（ms）：0→1 线性，8ms 对 click 足够且音量渐弱不可闻。 */
+        private const val RECOVERY_FADE_MS = 8
         private const val DEFAULT_BUFFER_CAPACITY_MS = 300
         /** 单包跳帧上限（ms）：把"攒到阈值再一刀切"的硬纠正摊成每包亚可察觉的微跳，
          *  边收漂移边消化，避免一次丢几十 ms 的可听断音。 */
