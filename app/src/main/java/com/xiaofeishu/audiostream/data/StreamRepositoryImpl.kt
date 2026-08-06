@@ -74,6 +74,10 @@ class StreamRepositoryImpl @Inject constructor(
     @Volatile private var lastServerActivityAtMs = 0L
     @Volatile private var sessionStartedAtMs = 0L
     @Volatile private var audioFramesReceived = 0L
+    /** 播放统计（码率/缓冲/字节数）上次发布到 StateFlow 的时刻。 */
+    @Volatile private var lastStatsPublishAtMs = 0L
+    /** 节流窗口内累积、尚未随状态发布的接收字节数。 */
+    @Volatile private var pendingReceivedBytes = 0L
     @Volatile private var currentServer: ServerInfo? = null
     @Volatile private var currentAttempt = 0
 
@@ -104,6 +108,8 @@ class StreamRepositoryImpl @Inject constructor(
         localPlaybackAllowed = true
         lastAudioDataAtMs = 0L
         lastServerActivityAtMs = 0L
+        lastStatsPublishAtMs = 0L
+        pendingReceivedBytes = 0L
         _state.update { it.copy(
             connectionState = ConnectionState.CONNECTING,
             server = server,
@@ -130,6 +136,8 @@ class StreamRepositoryImpl @Inject constructor(
     private fun startSession(server: ServerInfo, attempt: Int) {
         collectJob?.cancel()
         watchdogJob?.cancel()
+        lastStatsPublishAtMs = 0L
+        pendingReceivedBytes = 0L
         // 新会话重置本地播放闸门：connect() 会重置，但 watchdog/自动重连直接走 startSession，
         // 若沿用上次会话的本地暂停（localPlaybackAllowed=false），重连后所有 PCM 会被静默丢弃，
         // 表现为"状态显示暂停且永远无声"。
@@ -257,22 +265,29 @@ class StreamRepositoryImpl @Inject constructor(
         if (localPlaybackAllowed) {
             enqueueAudio(event.data)
         }
-        val stats = computeStats(now)
-        val streamPlaying = localPlaybackAllowed && player.isPlaying
-        _state.update { s ->
-            s.copy(
-                connectionState = if (streamPlaying) ConnectionState.PLAYING else s.connectionState,
-                receivedBytes = s.receivedBytes + event.data.size,
-                stats = stats,
-                mediaState = if (streamPlaying) {
-                    s.mediaState?.copy(playing = true) ?: MediaState(playing = true)
-                } else {
-                    s.mediaState
-                }
-            )
+        // 播放统计（码率/缓冲延迟/接收字节）节流发布：音频包约 10ms 一个，
+        // 每包都 _state.update 会让 Service 每 10ms 重建通知、播放页每 10ms 重组，
+        // 这是无谓的电量与渲染开销。500ms 发布一次对数值显示无感。
+        pendingReceivedBytes += event.data.size
+        if (now - lastStatsPublishAtMs >= STATS_PUBLISH_INTERVAL_MS) {
+            val stats = computeStats(now)
+            val streamPlaying = localPlaybackAllowed && player.isPlaying
+            _state.update { s ->
+                s.copy(
+                    connectionState = if (streamPlaying) ConnectionState.PLAYING else s.connectionState,
+                    receivedBytes = s.receivedBytes + pendingReceivedBytes,
+                    stats = stats,
+                    mediaState = if (streamPlaying) {
+                        s.mediaState?.copy(playing = true) ?: MediaState(playing = true)
+                    } else {
+                        s.mediaState
+                    }
+                )
+            }
+            pendingReceivedBytes = 0L
+            lastStatsPublishAtMs = now
         }
     }
-
     // 断开/出错的重连起点统一读 currentAttempt：onConnected 成功后会清零，
     // 保证"连过再断"从 1s 退避起步；只有连续失败（onConnected 未执行）才递增退避。
     // 不能用 startSession 闭包捕获的 attempt——它是本次会话发起时的历史值，不随成功清零。
@@ -773,6 +788,10 @@ class StreamRepositoryImpl @Inject constructor(
         private const val WATCHDOG_STALL_MS = 10_000L
         private const val WATCHDOG_CHECK_MS = 1_000L
 
+        /** 播放统计发布节流间隔：音频包约 10ms 一个，每包更新 StateFlow 会触发
+         *  Service 每 10ms 重建通知（binder 调用）与播放页每 10ms 重组（渲染开销）。
+         *  500ms 对码率窗口(1s)与延迟数值显示无感，是电量与实时的合理折中。 */
+        private const val STATS_PUBLISH_INTERVAL_MS = 500L
         /** 积压回落观察窗口：窗口内总积压最小值减目标水位 = 从未被抖动消耗的净冗余，可安全丢弃。 */
         private const val TRIM_WINDOW_MS = 4_000L
 

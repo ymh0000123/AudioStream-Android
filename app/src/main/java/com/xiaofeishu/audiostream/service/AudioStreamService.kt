@@ -13,6 +13,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -47,6 +48,10 @@ class AudioStreamService : Service() {
         const val ACTION_NEXT = "com.xiaofeishu.audiostream.NEXT"
         private const val WAKE_LOCK_TAG = "AudioStream::PlaybackLock"
         private const val WIFI_LOCK_TAG = "AudioStream::NetworkLock"
+        /** 活跃但未播放（本地暂停/首帧延迟）时的锁降级宽限期：
+         *  覆盖握手后到首帧音频的瞬态窗口，避免刚连接就降级导致首帧断连。
+         *  本地暂停超过此时间才释放 WakeLock 并降级 wifiLock。 */
+        private const val PAUSE_DEGRADE_GRACE_MS = 10_000L
         private const val REQUEST_CODE_PLAY_PAUSE = 10
         private const val REQUEST_CODE_PREV = 11
         private const val REQUEST_CODE_NEXT = 12
@@ -62,7 +67,12 @@ class AudioStreamService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
-
+    /** 当前 wifiLock 是否为低延迟模式（模式切换需释放后按新模式重建）。 */
+    private var wifiLockLowLatency: Boolean? = null
+    /** 进入"活跃但未播放"（本地暂停/握手后首帧延迟）状态的时刻，宽限期后降级锁。 */
+    private var pausedSinceMs = 0L
+    /** 上次通知的关键内容指纹：文本/标题/播放状态未变时跳过重建（省 binder 调用）。 */
+    private var lastNotificationKey: String? = null
     private lateinit var mediaSession: MediaSessionCompat
 
     private val mediaSessionCallback = object : MediaSessionCompat.Callback() {
@@ -102,7 +112,7 @@ class AudioStreamService : Service() {
         serviceScope.launch {
             streamRepository.state.collectLatest { state ->
                 updateNotification(state)
-                manageLocks(state.connectionState)
+                manageLocks(state)
             }
         }
     }
@@ -165,9 +175,23 @@ class AudioStreamService : Service() {
             else -> getString(R.string.notification_disconnected)
         }
         updateMediaSession(state)
-        val notification = buildNotification(text, state.mediaState, isLocallyPlaying(state))
-        val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(NOTIFICATION_ID, notification)
+        // 通知重建去重：只有影响通知展示的内容（连接状态/服务器/错误/标题/播放状态）
+        // 变化才 notify()。播放统计（码率/字节数）高频变化不该触发通知重建。
+        val ms = state.mediaState
+        val playing = isLocallyPlaying(state)
+        val key = buildString {
+            append(state.connectionState)
+            append('|').append(state.server?.display)
+            append('|').append(state.error)
+            append('|').append(state.reconnectAttempt)
+            append('|').append(ms?.title)
+            append('|').append(ms?.artist)
+            append('|').append(playing)
+        }
+        if (key == lastNotificationKey) return
+        lastNotificationKey = key
+        val notification = buildNotification(text, state.mediaState, playing)
+        getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification)
     }
 
     /**
@@ -334,17 +358,40 @@ class AudioStreamService : Service() {
         }
     }
 
-    private fun manageLocks(state: ConnectionState) {
-        // 只要会话处于活跃态（连接中/已握手/播放中）就持续持锁。
-        // 旧逻辑仅在 PLAYING/CONNECTING 持锁，会在 CONNECTED（握手后到首帧音频之间的瞬态）
-        // 释放 wifiLock/wakeLock；锁屏后首帧因网络限流延迟到达时，这个窗口会被拉长，
-        // WiFi 随之休眠 → 服务端读超时断连。CONNECTED 是即将播放的活跃态，不该丢锁。
-        if (state.isActive) {
-            acquireWakeLock()
-            acquireWifiLock()
-        } else {
+    /**
+     * 锁管理（省电分级）：
+     * - 播放中（PLAYING 或 mediaState.playing）或连接初期（CONNECTING）：全锁
+     *   （PARTIAL_WAKE_LOCK 保 CPU + LOW_LATENCY wifiLock 保低延迟链路）。
+     * - 活跃但未播放（CONNECTED：本地暂停 / 握手后首帧延迟）：宽限期（PAUSE_DEGRADE_GRACE_MS）
+     *   内保持全锁（覆盖握手瞬态，避免首帧延迟时丢锁断连——旧逻辑踩过的坑）；
+     *   宽限期后降级：释放 WakeLock（无音频写入时 CPU 可睡，WiFi 收包会唤醒 CPU 处理）
+     *   并将 wifiLock 降为 HIGH_PERF（保持连接不断，但允许包聚合等省电优化）。
+     *   恢复播放由 PLAYING 状态立即升回，不降级到丢锁断连。
+     * - 非活跃（DISCONNECTED/ERROR）：释放全部锁。
+     */
+    private fun manageLocks(state: com.xiaofeishu.audiostream.domain.model.PlaybackState) {
+        val cs = state.connectionState
+        if (!cs.isActive) {
+            pausedSinceMs = 0L
             releaseWifiLock()
             releaseWakeLock()
+            return
+        }
+        val playing = state.mediaState?.playing == true || cs == ConnectionState.PLAYING
+        if (playing || cs == ConnectionState.CONNECTING) {
+            pausedSinceMs = 0L
+            acquireWakeLock()
+            acquireWifiLock(lowLatency = true)
+        } else {
+            // 活跃但未播放（本地暂停 / 握手后首帧延迟）
+            if (pausedSinceMs == 0L) pausedSinceMs = SystemClock.elapsedRealtime()
+            if (SystemClock.elapsedRealtime() - pausedSinceMs >= PAUSE_DEGRADE_GRACE_MS) {
+                releaseWakeLock()
+                acquireWifiLock(lowLatency = false)
+            } else {
+                acquireWakeLock()
+                acquireWifiLock(lowLatency = true)
+            }
         }
     }
 
@@ -362,11 +409,17 @@ class AudioStreamService : Service() {
         wakeLock = null
     }
 
-    private fun acquireWifiLock() {
-        if (wifiLock != null) return
+    private fun acquireWifiLock(lowLatency: Boolean) {
+        // API < 34 没有 LOW_LATENCY 模式，一律 HIGH_PERF：此时两档无差别，
+        // 用 effectiveLowLatency 判等避免无谓的释放重建。
+        val effectiveLowLatency = lowLatency &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        if (wifiLock != null && wifiLockLowLatency == effectiveLowLatency) return
+        // 模式变化：WifiLock 创建后模式不可改，释放后按新模式重建
+        releaseWifiLock()
         runCatching {
             val wifi = getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val mode = if (effectiveLowLatency) {
                 WifiManager.WIFI_MODE_FULL_LOW_LATENCY
             } else {
                 @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
@@ -375,20 +428,23 @@ class AudioStreamService : Service() {
                 setReferenceCounted(false)
                 acquire()
             }
+            wifiLockLowLatency = effectiveLowLatency
         }.onSuccess {
-            val modeName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) "LOW_LATENCY" else "HIGH_PERF"
+            val modeName = if (effectiveLowLatency) "LOW_LATENCY" else "HIGH_PERF"
             android.util.Log.i("AudioStreamLock", "wifiLock acquired mode=$modeName held=${wifiLock?.isHeld == true}")
         }.onFailure { e ->
             // 旧逻辑 runCatching 静默吞掉失败：wifiLock 没真正拿到时无声，锁屏后 WiFi radio
             // 照样休眠 → socket reset → onFailure EOFException。这里必须把失败暴露出来。
             android.util.Log.e("AudioStreamLock", "wifiLock acquire FAILED", e)
             wifiLock = null
+            wifiLockLowLatency = null
         }
     }
 
     private fun releaseWifiLock() {
         wifiLock?.let { if (it.isHeld) it.release() }
         wifiLock = null
+        wifiLockLowLatency = null
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

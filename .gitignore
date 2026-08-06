@@ -29,6 +29,7 @@
 /.claude/settings.local.json
 /.mimocode
 /.opencode
+/.codewhale
 /.agents
 
 # 本地日志 / 草稿
