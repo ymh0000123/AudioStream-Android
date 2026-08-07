@@ -8,13 +8,31 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val appVersionName = (findProperty("appVersionName") as? String ?: "1.1.1")
+// 版本号单一事实源：-P 参数 > git 推导（最近 tag → versionName，提交总数 → versionCode）> 兜底常量。
+// 所有入口（build.ps1 / build.bat / CI 工作流 / 裸 gradlew）都走这里，避免各自算出不同版本号。
+// 注意：CI 检出必须用 fetch-depth: 0，浅克隆会让提交总数退化成 1。
+val fallbackVersionName = "1.3.0"
+val fallbackVersionCode = 22
+
+fun gitOutput(vararg command: String): String? = runCatching {
+    providers.exec {
+        commandLine(*command)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().takeIf { it.isNotEmpty() }
+}.getOrNull()
+
+val appVersionName = (findProperty("appVersionName") as? String
+    ?: gitOutput("git", "describe", "--tags", "--abbrev=0")
+    ?: fallbackVersionName)
     .removePrefix("v")
     .removePrefix("V")
-val appVersionCode = (findProperty("appVersionCode") as? String ?: "13")
-    .toIntOrNull()
-    ?.takeIf { it > 0 }
-    ?: error("appVersionCode must be a positive integer")
+val appVersionCode = (findProperty("appVersionCode") as? String)
+    ?.let { property ->
+        property.toIntOrNull()?.takeIf { it > 0 }
+            ?: error("appVersionCode must be a positive integer")
+    }
+    ?: gitOutput("git", "rev-list", "--count", "HEAD")?.toIntOrNull()?.takeIf { it > 0 }
+    ?: fallbackVersionCode
 
 android {
     namespace = "com.xiaofeishu.audiostream"

@@ -164,10 +164,12 @@ Write-Host ""
 Write-Host "🔨 正在编译 $BuildType APK..." -ForegroundColor Green
 
 $gradleArgs = @()
-if ($normalizedVersionName) {
+# 仅当用户显式传入时才覆盖；否则交给 app/build.gradle.kts 推导，
+# 保证本地脚本与 CI 工作流算出同一个版本号。
+if ($PSBoundParameters.ContainsKey('VersionName') -and $normalizedVersionName) {
     $gradleArgs += "-PappVersionName=$normalizedVersionName"
 }
-if ($null -ne $VersionCode) {
+if ($PSBoundParameters.ContainsKey('VersionCode') -and $null -ne $VersionCode) {
     $gradleArgs += "-PappVersionCode=$VersionCode"
 }
 $assembleTask = if ($BuildType -eq "debug") { "assembleDebug" } else { "assembleRelease" }
