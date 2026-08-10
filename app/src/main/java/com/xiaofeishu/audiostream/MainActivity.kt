@@ -41,6 +41,7 @@ import com.xiaofeishu.audiostream.service.AudioStreamService
 import com.xiaofeishu.audiostream.ui.screen.HistoryScreen
 import com.xiaofeishu.audiostream.ui.screen.HomeScreen
 import com.xiaofeishu.audiostream.ui.screen.PlayerScreen
+import com.xiaofeishu.audiostream.ui.screen.AboutScreen
 import com.xiaofeishu.audiostream.ui.screen.SettingsScreen
 import com.xiaofeishu.audiostream.ui.theme.AudioStreamTheme
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
@@ -157,7 +158,14 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 }
-                composable(Route.SETTINGS.path) { SettingsScreen() }
+                composable(Route.SETTINGS.path) {
+                    SettingsScreen(
+                        onNavigateToAbout = {
+                            navController.navigate(Route.ABOUT.path)
+                        }
+                    )
+                }
+                composable(Route.ABOUT.path) { AboutScreen() }
             }
         }
     }
@@ -175,7 +183,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Route(val path: String) {
-    HOME("home"), PLAYER("player"), HISTORY("history"), SETTINGS("settings");
+    HOME("home"), PLAYER("player"), HISTORY("history"), SETTINGS("settings"), ABOUT("about");
     override fun toString() = path
 }
 

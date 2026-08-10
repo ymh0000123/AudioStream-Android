@@ -3,6 +3,7 @@ package com.xiaofeishu.audiostream.ui.screen
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -58,7 +59,8 @@ private val LATENCY_MODES = listOf(0, 100, 150, 200)
 @Composable
 fun SettingsScreen(
     viewModel: HomeViewModel = hiltViewModel(),
-    updateViewModel: UpdateViewModel = hiltViewModel()
+    updateViewModel: UpdateViewModel = hiltViewModel(),
+    onNavigateToAbout: () -> Unit = {}
 ) {
     val savedServers by viewModel.savedServers.collectAsState()
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -205,6 +207,14 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // 关于
+        ListItem(
+            headlineContent = { Text("关于") },
+            supportingContent = { Text("应用版本与开源信息") },
+            modifier = Modifier.clickable { onNavigateToAbout() }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
         // 清除历史（真正调用 clearHistory，修复 saveVolume(80) bug）
         Button(
             onClick = { showClearConfirm = true },
