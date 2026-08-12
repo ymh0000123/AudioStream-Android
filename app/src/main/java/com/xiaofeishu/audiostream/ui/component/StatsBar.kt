@@ -1,6 +1,7 @@
 package com.xiaofeishu.audiostream.ui.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,21 +14,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import com.xiaofeishu.audiostream.domain.model.StreamStats
-
-/** 黄色警告色（amber），浅色/深色主题下均可读。 */
-private val WarningColor = Color(0xFFF9A825)
+import com.xiaofeishu.audiostream.ui.theme.AppColors
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 实时统计条：码率、已接收、缓冲延迟；蓝牙输出时额外显示链路延迟与降延迟警告。
@@ -43,54 +41,56 @@ fun StatsBar(
     onIgnoreSinkLatencyHint: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
+    val warningColor = AppColors.warning
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        insideMargin = DpSize(16.dp, 16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatItem("码率", "${stats.bitrateKbps} kbps")
-                StatItem("已接收", formatBytes(receivedBytes))
-                StatItem("缓冲延迟", "${stats.bufferLatencyMs} ms")
-                if (stats.bluetoothDevice != null) {
-                    StatItem("链路延迟", stats.sinkLatencyMs?.let { "$it ms" } ?: "—")
-                }
+            StatItem("码率", "${stats.bitrateKbps} kbps")
+            StatItem("已接收", formatBytes(receivedBytes))
+            StatItem("缓冲延迟", "${stats.bufferLatencyMs} ms")
+            if (stats.bluetoothDevice != null) {
+                StatItem("链路延迟", stats.sinkLatencyMs?.let { "$it ms" } ?: "—")
             }
-            val device = stats.bluetoothDevice
-            if (device != null && showSinkLatencyHint) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(WarningColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                        .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 2.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.Top) {
-                        Icon(
-                            imageVector = Icons.Filled.Warning,
-                            contentDescription = null,
-                            tint = WarningColor,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "蓝牙输出（${device.ifBlank { "未知设备" }}）：链路延迟为编解码器/耳机固有，" +
-                                "不计入缓冲延迟；开启耳机低延迟（游戏）模式或在系统中切换 aptX/LE Audio 可降低。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = WarningColor
-                        )
-                    }
-                    TextButton(
-                        onClick = onIgnoreSinkLatencyHint,
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Text("忽略", style = MaterialTheme.typography.labelMedium, color = WarningColor)
-                    }
+        }
+        val device = stats.bluetoothDevice
+        if (device != null && showSinkLatencyHint) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(warningColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = warningColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "蓝牙输出（${device.ifBlank { "未知设备" }}）：链路延迟为编解码器/耳机固有，" +
+                            "不计入缓冲延迟；开启耳机低延迟（游戏）模式或在系统中切换 aptX/LE Audio 可降低。",
+                        fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+                        color = warningColor
+                    )
                 }
+                Text(
+                    text = "忽略",
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    fontWeight = FontWeight.Medium,
+                    color = warningColor,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .clickable(onClick = onIgnoreSinkLatencyHint)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
             }
         }
     }
@@ -98,9 +98,17 @@ fun StatsBar(
 
 @Composable
 private fun StatItem(label: String, value: String) {
-    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Text(text = value, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            fontWeight = FontWeight.Bold,
+            fontSize = MiuixTheme.textStyles.body1.fontSize
+        )
+        Text(
+            text = label,
+            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
     }
 }
 

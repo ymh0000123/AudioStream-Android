@@ -8,6 +8,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -15,37 +21,29 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.xiaofeishu.audiostream.domain.model.ConnectionState
 import com.xiaofeishu.audiostream.service.AudioStreamService
+import com.xiaofeishu.audiostream.ui.screen.AboutScreen
 import com.xiaofeishu.audiostream.ui.screen.HistoryScreen
 import com.xiaofeishu.audiostream.ui.screen.HomeScreen
 import com.xiaofeishu.audiostream.ui.screen.PlayerScreen
-import com.xiaofeishu.audiostream.ui.screen.AboutScreen
 import com.xiaofeishu.audiostream.ui.screen.SettingsScreen
 import com.xiaofeishu.audiostream.ui.theme.AudioStreamTheme
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import top.yukonga.miuix.kmp.basic.NavigationBar
+import top.yukonga.miuix.kmp.basic.NavigationItem
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -64,7 +62,7 @@ class MainActivity : ComponentActivity() {
             AudioStreamTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = MiuixTheme.colorScheme.background
                 ) {
                     AudioStreamApp()
                 }
@@ -88,39 +86,40 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun AudioStreamApp() {
         val navController = rememberNavController()
-        val snackbarHostState = remember { SnackbarHostState() }
         val playerViewModel: PlayerViewModel = hiltViewModel()
-
-        // 错误上屏：监听播放状态中的 error
-        val playbackState by playerViewModel.uiState.collectAsStateWithLifecycle()
-        LaunchedEffect(playbackState.error, playbackState.connectionState) {
-            val err = playbackState.error
-            if (err != null && (playbackState.connectionState == ConnectionState.ERROR)) {
-                snackbarHostState.showSnackbar(err)
-            }
-        }
 
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
+        // 关于页是设置页的二级页面，底栏仍高亮"设置"；找不到时兜底 0 避免 -1 越界。
+        val selectedIndex = BottomNavItem.entries
+            .indexOfFirst { it.route == currentRoute }
+            .let { if (it >= 0) it else if (currentRoute == Route.ABOUT.path) BottomNavItem.SETTINGS.ordinal else 0 }
 
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            // 顶部 inset 由各屏幕的 TopAppBar 自己吃（miuix TopAppBar 内含 statusBars padding），
+            // 底部 inset 由 NavigationBar 自己吃。这里若保留默认 contentWindowInsets(statusBars)，
+            // 外层无 topBar 时 Scaffold 会兜底把状态栏高度加到 body 上，与 TopAppBar 叠加成两倍，
+            // 顶部就会多出一大片空白。
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                NavigationBar {
-                    BottomNavItem.entries.forEach { item ->
-                        NavigationBarItem(
-                            selected = currentRoute == item.route,
-                            onClick = {
-                                navController.navigate(item.route) {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = { Text(item.label) }
-                        )
-                    }
+                // 关于页是二级页面，不显示底部导航栏；隐藏时 bottomBar 高度归零，
+                // 关于页需自行处理 navigationBars inset（见 AboutScreen）。
+                AnimatedVisibility(
+                    visible = currentRoute != Route.ABOUT.path,
+                    enter = slideInVertically(initialOffsetY = { it }) + expandVertically(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically()
+                ) {
+                    NavigationBar(
+                        items = BottomNavItem.entries.map { NavigationItem(it.label, it.icon) },
+                        selected = selectedIndex,
+                        onClick = { index ->
+                            navController.navigate(BottomNavItem.entries[index].route) {
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    )
                 }
             }
         ) { paddingValues ->

@@ -39,6 +39,8 @@ import com.xiaofeishu.audiostream.MainActivity
  *
  * 读取最近一次崩溃报告并展示，支持复制、分享、重启、清除。
  * 故意使用最简依赖（无主题文件引用、无 DI），避免在主进程崩溃后此页再次出问题。
+ * 出于同样的理由，本页保留 Material3 而不迁移到 Miuix：崩溃兜底页不应引入
+ * 额外的第三方 UI 库初始化风险。全 App 其余部分已统一使用 Miuix。
  */
 class CrashActivity : ComponentActivity() {
 

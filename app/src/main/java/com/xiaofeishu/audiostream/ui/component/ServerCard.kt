@@ -8,18 +8,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 服务器卡片。点击连接，星标收藏。
@@ -35,13 +35,12 @@ fun ServerCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        insideMargin = DpSize(16.dp, 16.dp)
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -49,16 +48,16 @@ fun ServerCard(
                 Text(
                     text = "${server.display} · ${server.protocol.displayName}",
                     modifier = Modifier.padding(top = 4.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                 )
             }
             IconButton(onClick = onToggleSaved) {
                 Icon(
                     imageVector = if (server.saved) Icons.Filled.Star else Icons.Outlined.Star,
                     contentDescription = "收藏",
-                    tint = if (server.saved) MaterialTheme.colorScheme.secondary
-                           else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (server.saved) MiuixTheme.colorScheme.primary
+                           else MiuixTheme.colorScheme.onSurfaceVariantActions
                 )
             }
         }

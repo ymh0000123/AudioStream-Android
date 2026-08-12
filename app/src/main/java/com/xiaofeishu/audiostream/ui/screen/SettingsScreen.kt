@@ -3,55 +3,54 @@ package com.xiaofeishu.audiostream.ui.screen
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.core.net.toUri
 import com.xiaofeishu.audiostream.BuildConfig
 import com.xiaofeishu.audiostream.R
 import com.xiaofeishu.audiostream.data.update.UpdateInfo
+import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.ui.component.SteppedSlider
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
 import com.xiaofeishu.audiostream.viewmodel.UpdateUiState
 import com.xiaofeishu.audiostream.viewmodel.UpdateViewModel
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.extra.SuperArrow
+import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.MiuixPopupUtil.Companion.dismissDialog
 
 /** 播放延迟固定档位（ms 阈值）：0=关闭跳帧。 */
 private val LATENCY_MODES = listOf(0, 100, 150, 200)
@@ -63,7 +62,7 @@ fun SettingsScreen(
     onNavigateToAbout: () -> Unit = {}
 ) {
     val savedServers by viewModel.savedServers.collectAsState()
-    var showClearConfirm by remember { mutableStateOf(false) }
+    val showClearConfirm = remember { mutableStateOf(false) }
     val context = LocalContext.current
     val latencyMode by viewModel.latencyMode.collectAsState()
     val updateState by updateViewModel.uiState.collectAsState()
@@ -75,7 +74,7 @@ fun SettingsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+            if (event == Lifecycle.Event.ON_RESUME) {
                 batteryIgnored = checkBatteryIgnored(context)
             }
         }
@@ -83,50 +82,62 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-    ) {
-        Text(
-            text = "设置",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
+    val hideSinkLatencyHint by viewModel.hideSinkLatencyHint.collectAsState()
 
-        // 后台保活 - 电池优化豁免
-        ListItem(
-            headlineContent = { Text(context.getString(R.string.battery_optimization)) },
-            supportingContent = { Text(context.getString(R.string.battery_optimization_desc)) },
-            trailingContent = {
-                if (batteryIgnored) {
-                    Text(
-                        text = context.getString(R.string.battery_optimization_granted),
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                } else {
-                    Button(onClick = {
-                        val intent = Intent(
-                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            "package:${context.packageName}".toUri()
-                        )
-                        context.startActivity(intent)
-                    }) {
-                        Text(context.getString(R.string.battery_optimization_request))
+    Scaffold(
+        topBar = {
+            AppTopBar(
+                title = "设置"
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(top = padding.calculateTopPadding())
+        ) {
+            SmallTitle(text = "后台保活")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                SuperArrow(
+                    title = context.getString(R.string.battery_optimization),
+                    summary = context.getString(R.string.battery_optimization_desc),
+                    rightText = if (batteryIgnored) {
+                        context.getString(R.string.battery_optimization_granted)
+                    } else {
+                        context.getString(R.string.battery_optimization_request)
+                    },
+                    onClick = if (batteryIgnored) {
+                        null
+                    } else {
+                        {
+                            val intent = Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                "package:${context.packageName}".toUri()
+                            )
+                            context.startActivity(intent)
+                        }
                     }
-                }
+                )
             }
-        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        // 播放延迟模式
-        ListItem(
-            headlineContent = { Text(context.getString(R.string.latency_mode)) },
-            supportingContent = {
+            SmallTitle(text = "播放")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                insideMargin = DpSize(16.dp, 16.dp)
+            ) {
+                Text(
+                    text = context.getString(R.string.latency_mode),
+                    fontSize = MiuixTheme.textStyles.main.fontSize
+                )
                 SteppedSlider(
                     values = LATENCY_MODES,
                     currentValue = latencyMode,
@@ -141,224 +152,322 @@ fun SettingsScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp)
+                        .padding(top = 8.dp)
                 )
             }
-        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        // 蓝牙链路延迟警告提示：忽略后可在此恢复
-        val hideSinkLatencyHint by viewModel.hideSinkLatencyHint.collectAsState()
-        ListItem(
-            headlineContent = { Text("链路延迟警告提示") },
-            supportingContent = {
-                Text(
-                    if (hideSinkLatencyHint) "已忽略：蓝牙输出时不再显示链路延迟警告"
-                    else "蓝牙输出时在播放页显示链路延迟警告"
-                )
-            },
-            trailingContent = {
-                Switch(
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                // 蓝牙链路延迟警告提示：忽略后可在此恢复
+                SuperSwitch(
+                    title = "链路延迟警告提示",
+                    summary = if (hideSinkLatencyHint) {
+                        "已忽略：蓝牙输出时不再显示链路延迟警告"
+                    } else {
+                        "蓝牙输出时在播放页显示链路延迟警告"
+                    },
                     checked = !hideSinkLatencyHint,
                     onCheckedChange = { show -> viewModel.setHideSinkLatencyHint(!show) }
                 )
+                SuperArrow(
+                    title = "收藏的服务器",
+                    summary = "${savedServers.size} 个",
+                    onClick = null
+                )
             }
-        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        // 收藏服务器数量
-        ListItem(
-            headlineContent = { Text("收藏的服务器") },
-            supportingContent = { Text("${savedServers.size} 个") }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        ListItem(
-            headlineContent = { Text(context.getString(R.string.check_for_updates)) },
-            supportingContent = {
-                Text(
-                    if (updateState == UpdateUiState.Checking) {
+            SmallTitle(text = "关于与更新")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                SuperArrow(
+                    title = context.getString(R.string.check_for_updates),
+                    summary = if (updateState == UpdateUiState.Checking) {
                         context.getString(R.string.update_checking)
                     } else {
                         context.getString(R.string.current_version, BuildConfig.VERSION_NAME)
-                    }
-                )
-            },
-            trailingContent = {
-                OutlinedButton(
-                    onClick = updateViewModel::checkForUpdates,
-                    enabled = updateState != UpdateUiState.Checking,
-                    modifier = Modifier.widthIn(min = 104.dp)
-                ) {
-                    if (updateState == UpdateUiState.Checking) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
+                    },
+                    rightText = if (updateState == UpdateUiState.Checking) {
+                        null
                     } else {
-                        Text(context.getString(R.string.check_now))
-                    }
-                }
+                        context.getString(R.string.check_now)
+                    },
+                    enabled = updateState != UpdateUiState.Checking,
+                    onClick = updateViewModel::checkForUpdates
+                )
+                SuperArrow(
+                    title = "关于",
+                    summary = "应用版本与开源信息",
+                    onClick = onNavigateToAbout
+                )
             }
-        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-        // 关于
-        ListItem(
-            headlineContent = { Text("关于") },
-            supportingContent = { Text("应用版本与开源信息") },
-            modifier = Modifier.clickable { onNavigateToAbout() }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-        // 清除历史（真正调用 clearHistory，修复 saveVolume(80) bug）
-        Button(
-            onClick = { showClearConfirm = true },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer
+            // 清除历史（真正调用 clearHistory，修复 saveVolume(80) bug）
+            Button(
+                text = "清除连接历史",
+                onClick = { showClearConfirm.value = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
             )
-        ) { Text("清除连接历史") }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
     }
 
-    if (showClearConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirm = false },
-            title = { Text("清除连接历史") },
-            text = { Text("将删除全部连接历史记录，收藏的服务器不受影响。是否继续？") },
-            confirmButton = {
-                Button(onClick = {
-                    viewModel.clearHistory()
-                    showClearConfirm = false
-                }) { Text("清除") }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { showClearConfirm = false }) { Text("取消") }
+    SuperDialog(
+        title = "清除连接历史",
+        summary = "将删除全部连接历史记录，收藏的服务器不受影响。是否继续？",
+        show = showClearConfirm,
+        onDismissRequest = { dismissDialog(showClearConfirm) }
+    ) {
+        DialogButtonRow(
+            cancelText = "取消",
+            confirmText = "清除",
+            onCancel = { dismissDialog(showClearConfirm) },
+            onConfirm = {
+                viewModel.clearHistory()
+                dismissDialog(showClearConfirm)
             }
         )
     }
+
+    UpdateDialogs(
+        context = context,
+        updateState = updateState,
+        downloadOptions = downloadOptions,
+        onDownloadOptionsChange = { downloadOptions = it },
+        updateViewModel = updateViewModel
+    )
+}
+
+/**
+ * 更新相关弹窗。
+ *
+ * 关键约束：Miuix 的对话框由 [top.yukonga.miuix.kmp.utils.MiuixPopupUtil] 的
+ * **进程级单例** 承载（isDialogShowing / dialogContext），且 showDialog 在已显示时会直接早退。
+ * 因此这里必须满足两点，否则会出现"弹窗关不掉"和"叠两层弹窗"：
+ *
+ * 1. 全程只使用**一个** SuperDialog 与**一个** show 状态，内容按 [UpdateUiState] 分支渲染，
+ *    绝不能为每种状态各建一个 SuperDialog（那样多个 show 会在同一帧争抢单例）。
+ * 2. 任何关闭路径都必须走 [dismissDialog] 把 show 置为 false，
+ *    只调 ViewModel 的 dismissResult() 不会复位单例，弹窗会永久卡住。
+ */
+@Composable
+private fun UpdateDialogs(
+    context: Context,
+    updateState: UpdateUiState,
+    downloadOptions: UpdateInfo?,
+    onDownloadOptionsChange: (UpdateInfo?) -> Unit,
+    updateViewModel: UpdateViewModel
+) {
+    val show = remember { mutableStateOf(false) }
+
+    // 有内容可展示时才打开：下载方式选择优先于版本详情
+    val hasContent = downloadOptions != null ||
+        updateState is UpdateUiState.Available ||
+        updateState is UpdateUiState.UpToDate ||
+        updateState is UpdateUiState.Error
+    LaunchedEffect(hasContent) {
+        show.value = hasContent
+    }
+
+    // 统一关闭入口：先复位 Miuix 单例，再清业务状态
+    val dismissAll: () -> Unit = {
+        dismissDialog(show)
+        onDownloadOptionsChange(null)
+        updateViewModel.dismissResult()
+    }
+
+    if (!hasContent) return
 
     val selectedDownload = downloadOptions
-    if (selectedDownload != null) {
-        AlertDialog(
-            onDismissRequest = { downloadOptions = null },
-            title = { Text(context.getString(R.string.download_method_title)) },
-            text = {
-                Column {
-                    Text(context.getString(R.string.download_method_desc))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    selectedDownload.mirrorDownloadUrl?.let { mirrorUrl ->
-                        Button(
-                            onClick = {
-                                openUrl(context, mirrorUrl)
-                                downloadOptions = null
-                                updateViewModel.dismissResult()
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.CloudDownload, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(context.getString(R.string.download_via_mirror))
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            openUrl(context, selectedDownload.downloadUrl)
-                            downloadOptions = null
-                            updateViewModel.dismissResult()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.OpenInBrowser, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(context.getString(R.string.download_via_github))
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { downloadOptions = null }) {
-                    Text(context.getString(R.string.cancel))
-                }
-            }
-        )
-    } else when (val state = updateState) {
-        is UpdateUiState.Available -> AlertDialog(
-            onDismissRequest = updateViewModel::dismissResult,
-            title = { Text(context.getString(R.string.update_available_title)) },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(context.getString(R.string.latest_version, state.info.versionName))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = context.getString(R.string.update_notes),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        state.info.releaseNotes.ifBlank {
-                            context.getString(R.string.no_release_notes)
-                        }
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (state.info.mirrorDownloadUrl == null) {
-                        openUrl(context, state.info.downloadUrl)
-                        updateViewModel.dismissResult()
+    val title = when {
+        selectedDownload != null -> context.getString(R.string.download_method_title)
+        updateState is UpdateUiState.Available ->
+            context.getString(R.string.update_available_title)
+        updateState is UpdateUiState.UpToDate ->
+            context.getString(R.string.already_latest_title)
+        else -> context.getString(R.string.update_check_failed_title)
+    }
+
+    SuperDialog(
+        title = title,
+        show = show,
+        onDismissRequest = dismissAll
+    ) {
+        when {
+            selectedDownload != null -> DownloadMethodContent(
+                context = context,
+                info = selectedDownload,
+                onPicked = { url ->
+                    openUrl(context, url)
+                    dismissAll()
+                },
+                onCancel = dismissAll
+            )
+
+            updateState is UpdateUiState.Available -> AvailableContent(
+                context = context,
+                info = updateState.info,
+                onCancel = dismissAll,
+                onConfirm = {
+                    if (updateState.info.mirrorDownloadUrl == null) {
+                        openUrl(context, updateState.info.downloadUrl)
+                        dismissAll()
                     } else {
-                        downloadOptions = state.info
+                        // 切到下载方式选择：复用同一个弹窗，不新建 SuperDialog
+                        onDownloadOptionsChange(updateState.info)
                     }
-                }) { Text(context.getString(R.string.download_update)) }
-            },
-            dismissButton = {
-                TextButton(onClick = updateViewModel::dismissResult) {
-                    Text(context.getString(R.string.cancel))
                 }
-            }
-        )
+            )
 
-        is UpdateUiState.UpToDate -> AlertDialog(
-            onDismissRequest = updateViewModel::dismissResult,
-            title = { Text(context.getString(R.string.already_latest_title)) },
-            text = {
-                Text(context.getString(R.string.already_latest_desc, BuildConfig.VERSION_NAME))
-            },
-            confirmButton = {
-                TextButton(onClick = updateViewModel::dismissResult) {
-                    Text(context.getString(R.string.close))
-                }
+            updateState is UpdateUiState.UpToDate -> Column {
+                Text(
+                    text = context.getString(
+                        R.string.already_latest_desc,
+                        BuildConfig.VERSION_NAME
+                    ),
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    text = context.getString(R.string.close),
+                    submit = true,
+                    onClick = dismissAll,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
-        )
 
-        is UpdateUiState.Error -> AlertDialog(
-            onDismissRequest = updateViewModel::dismissResult,
-            title = { Text(context.getString(R.string.update_check_failed_title)) },
-            text = { Text(state.message) },
-            confirmButton = {
-                TextButton(onClick = updateViewModel::checkForUpdates) {
-                    Text(context.getString(R.string.retry))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = updateViewModel::dismissResult) {
-                    Text(context.getString(R.string.close))
-                }
+            updateState is UpdateUiState.Error -> Column {
+                Text(
+                    text = updateState.message,
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                DialogButtonRow(
+                    cancelText = context.getString(R.string.close),
+                    confirmText = context.getString(R.string.retry),
+                    onCancel = dismissAll,
+                    onConfirm = {
+                        dismissDialog(show)
+                        updateViewModel.checkForUpdates()
+                    }
+                )
             }
-        )
+        }
+    }
+}
 
-        UpdateUiState.Checking,
-        UpdateUiState.Idle -> Unit
+@Composable
+private fun DownloadMethodContent(
+    context: Context,
+    info: UpdateInfo,
+    onPicked: (String) -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = context.getString(R.string.download_method_desc),
+            fontSize = MiuixTheme.textStyles.body2.fontSize,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        info.mirrorDownloadUrl?.let { mirrorUrl ->
+            Button(
+                text = context.getString(R.string.download_via_mirror),
+                submit = true,
+                onClick = { onPicked(mirrorUrl) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Button(
+            text = context.getString(R.string.download_via_github),
+            onClick = { onPicked(info.downloadUrl) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            text = context.getString(R.string.cancel),
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun AvailableContent(
+    context: Context,
+    info: UpdateInfo,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Column {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 280.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(context.getString(R.string.latest_version, info.versionName))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = context.getString(R.string.update_notes),
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = info.releaseNotes.ifBlank {
+                    context.getString(R.string.no_release_notes)
+                },
+                fontSize = MiuixTheme.textStyles.body2.fontSize,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        DialogButtonRow(
+            cancelText = context.getString(R.string.cancel),
+            confirmText = context.getString(R.string.download_update),
+            onCancel = onCancel,
+            onConfirm = onConfirm
+        )
+    }
+}
+
+/** SuperDialog 没有内置按钮区，统一封装左取消右确认的按钮行。 */
+@Composable
+private fun DialogButtonRow(
+    cancelText: String,
+    confirmText: String,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(
+            text = cancelText,
+            onClick = onCancel,
+            modifier = Modifier.weight(1f)
+        )
+        Button(
+            text = confirmText,
+            submit = true,
+            onClick = onConfirm,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

@@ -9,19 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -36,8 +25,20 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
+import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.ui.component.ServerCard
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.LazyColumn
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.MiuixPopupUtil.Companion.dismissDialog
 
 @Composable
 fun HomeScreen(
@@ -53,119 +54,121 @@ fun HomeScreen(
         onPauseOrDispose { viewModel.stopScan() }
     }
 
-    var showDialog by remember { mutableStateOf(false) }
+    val showDialog = remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("19730") }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Text(
-            text = "AudioStream",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    Scaffold(
+        topBar = {
+            AppTopBar(
+                title = "AudioStream",
+                actions = {
+                    IconButton(onClick = { viewModel.startScan() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "重新扫描",
+                            tint = MiuixTheme.colorScheme.onBackground
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = padding.calculateTopPadding())
         ) {
-            Text(
+            SmallTitle(
                 text = when {
                     servers.isNotEmpty() -> "发现的服务器 (${servers.size})"
                     isScanning -> "正在搜索服务器…"
                     else -> "未发现服务器"
-                },
-                style = MaterialTheme.typography.titleMedium
+                }
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                if (isScanning) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                }
-                IconButton(onClick = { viewModel.startScan() }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
-                }
-            }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (servers.isNotEmpty()) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(servers, key = { it.key }) { server ->
-                    ServerCard(
-                        server = server,
-                        onClick = { onConnect(server) },
-                        onToggleSaved = { viewModel.toggleSaved(server) }
-                    )
+            if (servers.isNotEmpty()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(servers.size, key = { servers[it].key }) { index ->
+                        val server = servers[index]
+                        ServerCard(
+                            server = server,
+                            onClick = { onConnect(server) },
+                            onToggleSaved = { viewModel.toggleSaved(server) }
+                        )
+                    }
                 }
+            } else {
+                Text(
+                    text = "请确保服务端已启动，且手机与电脑在同一网络",
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
+                )
+                Button(
+                    text = "重新扫描",
+                    onClick = { viewModel.startScan() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                )
+                Spacer(modifier = Modifier.weight(1f))
             }
-        } else {
-            Text(
-                text = "请确保服务端已启动，且手机与电脑在同一网络",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 16.dp)
+
+            Button(
+                text = "手动连接",
+                onClick = { showDialog.value = true },
+                submit = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 12.dp)
             )
-            OutlinedButton(
-                onClick = { viewModel.startScan() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("重新扫描")
-            }
-            Spacer(modifier = Modifier.weight(1f))
-        }
-
-        Button(
-            onClick = { showDialog = true },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("手动连接")
         }
     }
 
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("连接服务器") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = { address = it },
-                        label = { Text("服务器地址") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = port,
-                        onValueChange = { port = it },
-                        label = { Text("端口") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val portInt = port.toIntOrNull() ?: 19730
-                    onConnect(ServerInfo(address, address, portInt, Protocol.WEBSOCKET))
-                    showDialog = false
-                }) { Text("连接") }
-            },
-            dismissButton = {
-                Button(onClick = { showDialog = false }) { Text("取消") }
+    SuperDialog(
+        title = "连接服务器",
+        show = showDialog,
+        onDismissRequest = { dismissDialog(showDialog) }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            TextField(
+                value = address,
+                onValueChange = { address = it },
+                label = "服务器地址",
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextField(
+                value = port,
+                onValueChange = { port = it },
+                label = "端口",
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    text = "取消",
+                    onClick = { dismissDialog(showDialog) },
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    text = "连接",
+                    submit = true,
+                    onClick = {
+                        val portInt = port.toIntOrNull() ?: 19730
+                        onConnect(ServerInfo(address, address, portInt, Protocol.WEBSOCKET))
+                        dismissDialog(showDialog)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
             }
-        )
+        }
     }
 }

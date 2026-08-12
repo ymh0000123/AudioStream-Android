@@ -1,7 +1,5 @@
 package com.xiaofeishu.audiostream.ui.screen
 
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,7 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -18,16 +19,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -40,16 +31,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.domain.model.ConnectionState
 import com.xiaofeishu.audiostream.domain.model.MediaAction
+import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.ui.component.ConnectionStatus
 import com.xiaofeishu.audiostream.ui.component.QualityIndicator
 import com.xiaofeishu.audiostream.ui.component.StatsBar
 import com.xiaofeishu.audiostream.ui.component.SteppedSlider
+import com.xiaofeishu.audiostream.ui.theme.AppColors
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Slider
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 码率固定档位（kbps），从低到高。 */
 private val BITRATE_PRESETS = listOf(64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072)
@@ -84,83 +88,88 @@ fun PlayerScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        ConnectionStatus(
-            state = state.connectionState,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-
-        state.error?.let { err ->
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = err,
-                color = if (state.connectionState == ConnectionState.CONNECTING)
-                    MaterialTheme.colorScheme.tertiary
-                else
-                    MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
+    Scaffold(
+        topBar = {
+            AppTopBar(
+                title = "播放"
             )
         }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(top = padding.calculateTopPadding())
+        ) {
+            ConnectionStatus(
+                state = state.connectionState,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(top = 4.dp)
+            )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            state.error?.let { err ->
+                Text(
+                    text = err,
+                    color = if (state.connectionState == ConnectionState.CONNECTING) {
+                        AppColors.warning
+                    } else {
+                        AppColors.error
+                    },
+                    fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp, vertical = 4.dp)
+                )
+            }
 
-        state.audioFormat?.let { fmt ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            state.audioFormat?.let { fmt ->
+                SmallTitle(text = "音频格式")
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    insideMargin = DpSize(16.dp, 16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("音频格式", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text("音频格式", fontWeight = FontWeight.Bold)
                         QualityIndicator(quality = state.stats.quality)
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
                     InfoRow("采样率", "${fmt.sampleRate}Hz")
                     InfoRow("通道", "${fmt.channels}ch")
                     InfoRow("位深", "${fmt.bitsPerSample}bit")
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                val hideHint by viewModel.hideSinkLatencyHint.collectAsState()
+                StatsBar(
+                    stats = state.stats,
+                    receivedBytes = state.receivedBytes,
+                    showSinkLatencyHint = !hideHint,
+                    onIgnoreSinkLatencyHint = viewModel::ignoreSinkLatencyHint,
+                    modifier = Modifier.padding(horizontal = 12.dp)
+                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            val hideHint by viewModel.hideSinkLatencyHint.collectAsState()
-            StatsBar(
-                stats = state.stats,
-                receivedBytes = state.receivedBytes,
-                showSinkLatencyHint = !hideHint,
-                onIgnoreSinkLatencyHint = viewModel::ignoreSinkLatencyHint
-            )
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (state.isConnected) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+            if (state.isConnected) {
+                Spacer(modifier = Modifier.height(12.dp))
+                SmallTitle(text = "媒体控制")
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    insideMargin = DpSize(16.dp, 16.dp)
                 ) {
-                    Text(
-                        text = "媒体控制",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     val ms = state.mediaState
                     if (ms != null && (ms.title.isNotEmpty() || ms.artist.isNotEmpty())) {
                         Text(
                             text = ms.title.ifEmpty { "未知曲目" },
-                            style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -170,8 +179,8 @@ fun PlayerScreen(
                         if (ms.artist.isNotEmpty()) {
                             Text(
                                 text = ms.artist,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = MiuixTheme.textStyles.body2.fontSize,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.fillMaxWidth(),
@@ -182,27 +191,33 @@ fun PlayerScreen(
                     }
 
                     if (ms != null && ms.durationMs > 0) {
+                        val duration = ms.durationMs.toFloat().coerceAtLeast(1f)
                         Slider(
-                            value = currentPositionMs.toFloat().coerceIn(0f, ms.durationMs.toFloat()),
-                            onValueChange = { currentPositionMs = it.toLong() },
-                            onValueChangeFinished = {
+                            progress = currentPositionMs.toFloat().coerceIn(0f, duration),
+                            minValue = 0f,
+                            maxValue = duration,
+                            // Miuix 的 Slider 没有 onValueChangeFinished，进度条改为拖动即定位；
+                            // 服务端 seek 有节流，短时间多次请求不会造成压力。
+                            onProgressChange = { value ->
+                                currentPositionMs = value.toLong()
                                 viewModel.seekTo(currentPositionMs)
                             },
-                            valueRange = 0f..ms.durationMs.toFloat().coerceAtLeast(1f),
                             modifier = Modifier.fillMaxWidth()
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
                                 text = formatDuration(currentPositionMs),
-                                style = MaterialTheme.typography.bodySmall
+                                fontSize = MiuixTheme.textStyles.footnote1.fontSize
                             )
                             Text(
                                 text = formatDuration(ms.durationMs),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -213,121 +228,152 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        OutlinedButton(onClick = { viewModel.sendCommand(MediaAction.PREVIOUS) }) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "上一曲")
-                            Spacer(Modifier.width(4.dp))
-                            Text("上一曲")
-                        }
-                        IconButton(onClick = { viewModel.sendCommand(MediaAction.PLAY_PAUSE) }) {
+                        IconButton(onClick = { viewModel.sendCommand(MediaAction.PREVIOUS) }) {
                             Icon(
-                                if (ms?.playing == true) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (ms?.playing == true) "暂停" else "播放",
-                                modifier = Modifier.padding(16.dp)
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "上一曲",
+                                tint = MiuixTheme.colorScheme.onSurface
                             )
                         }
-                        OutlinedButton(onClick = { viewModel.sendCommand(MediaAction.NEXT) }) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "下一曲")
-                            Spacer(Modifier.width(4.dp))
-                            Text("下一曲")
+                        IconButton(
+                            onClick = { viewModel.sendCommand(MediaAction.PLAY_PAUSE) },
+                            backgroundColor = MiuixTheme.colorScheme.primary,
+                            minWidth = 56.dp,
+                            minHeight = 56.dp
+                        ) {
+                            Icon(
+                                imageVector = if (ms?.playing == true) {
+                                    Icons.Default.Pause
+                                } else {
+                                    Icons.Default.PlayArrow
+                                },
+                                contentDescription = if (ms?.playing == true) "暂停" else "播放",
+                                tint = MiuixTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.sendCommand(MediaAction.NEXT) }) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "下一曲",
+                                tint = MiuixTheme.colorScheme.onSurface
+                            )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     // 服务端静音：只关电脑扬声器。采集在端点静音之前，手机端串流照常播放。
                     val serverMuted = ms?.muted == true
-                    OutlinedButton(
-                        onClick = { viewModel.setServerMute(!serverMuted) },
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = if (serverMuted) {
-                            ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
-                        } else {
-                            ButtonDefaults.outlinedButtonColors()
-                        }
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            if (serverMuted) Icons.AutoMirrored.Filled.VolumeOff
-                            else Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = null
+                            imageVector = if (serverMuted) {
+                                Icons.AutoMirrored.Filled.VolumeOff
+                            } else {
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            },
+                            contentDescription = null,
+                            tint = if (serverMuted) AppColors.error else MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (serverMuted) "电脑已静音，点击恢复" else "静音电脑（手机继续播放）")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            text = if (serverMuted) "电脑已静音，点击恢复" else "静音电脑（手机继续播放）",
+                            onClick = { viewModel.setServerMute(!serverMuted) },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
-        Text(
-            text = "目标码率",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        SteppedSlider(
-            values = BITRATE_PRESETS,
-            currentValue = state.currentBitrate,
-            onValueCommitted = viewModel::setBitrate,
-            valueLabel = { "$it kbps" },
-            modifier = Modifier.fillMaxWidth()
-        )
+            Spacer(modifier = Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "音量",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Slider(
-            value = state.volume,
-            onValueChange = viewModel::setVolume,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("自动重连", style = MaterialTheme.typography.bodyMedium)
-            Switch(
-                checked = state.autoReconnect,
-                onCheckedChange = viewModel::setAutoReconnect
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        when (state.connectionState) {
-            ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
-                Button(
-                    onClick = viewModel::reconnectPending,
+            SmallTitle(text = "目标码率")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                insideMargin = DpSize(16.dp, 16.dp)
+            ) {
+                SteppedSlider(
+                    values = BITRATE_PRESETS,
+                    currentValue = state.currentBitrate,
+                    onValueCommitted = viewModel::setBitrate,
+                    valueLabel = { "$it kbps" },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("开始连接") }
+                )
             }
-            ConnectionState.CONNECTING -> {
-                Button(
-                    onClick = viewModel::disconnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SmallTitle(text = "音量")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                insideMargin = DpSize(16.dp, 16.dp)
+            ) {
+                Slider(
+                    progress = state.volume,
+                    minValue = 0f,
+                    maxValue = 1f,
+                    onProgressChange = viewModel::setVolume,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                SuperSwitch(
+                    title = "自动重连",
+                    summary = "断开后自动尝试重新连接",
+                    checked = state.autoReconnect,
+                    onCheckedChange = viewModel::setAutoReconnect
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            when (state.connectionState) {
+                ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
+                    Button(
+                        text = "开始连接",
+                        submit = true,
+                        onClick = viewModel::reconnectPending,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
                     )
-                ) { Text("取消连接") }
-            }
-            else -> {
-                Button(
-                    onClick = viewModel::disconnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
+                }
+                ConnectionState.CONNECTING -> {
+                    Button(
+                        text = "取消连接",
+                        onClick = viewModel::disconnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
                     )
-                ) { Text("断开连接") }
+                }
+                else -> {
+                    Button(
+                        text = "断开连接",
+                        onClick = viewModel::disconnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
@@ -335,11 +381,21 @@ fun PlayerScreen(
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        Text(
+            text = label,
+            fontSize = MiuixTheme.textStyles.body2.fontSize,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+        Text(
+            text = value,
+            fontSize = MiuixTheme.textStyles.body2.fontSize,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

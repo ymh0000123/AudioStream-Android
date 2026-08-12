@@ -131,6 +131,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
+    // Miuix（HyperOS 风格组件库）。0.2.9 是最后一个基于 Kotlin 2.0.21 + Compose 1.7.0 的版本，
+    // 与本项目版本矩阵对齐；升级 Miuix 需同步升 Kotlin/Compose，勿单独提版本。
+    implementation("top.yukonga.miuix.kmp:miuix-android:0.2.9")
+
     // Activity & Lifecycle
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")

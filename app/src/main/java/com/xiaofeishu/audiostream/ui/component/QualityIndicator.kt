@@ -4,14 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.xiaofeishu.audiostream.domain.model.Quality
+import com.xiaofeishu.audiostream.ui.theme.AppColors
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 连接质量指示徽章。
@@ -22,10 +22,10 @@ fun QualityIndicator(
     modifier: Modifier = Modifier
 ) {
     val (text, color) = when (quality) {
-        Quality.GOOD -> "好" to Color(0xFF4ADE80)
-        Quality.FAIR -> "一般" to Color(0xFFFBBF24)
-        Quality.POOR -> "差" to Color(0xFFF87171)
-        Quality.UNKNOWN -> "—" to MaterialTheme.colorScheme.outline
+        Quality.GOOD -> "好" to AppColors.success
+        Quality.FAIR -> "一般" to AppColors.warning
+        Quality.POOR -> "差" to AppColors.error
+        Quality.UNKNOWN -> "—" to MiuixTheme.colorScheme.outline
     }
     Box(
         modifier = modifier
@@ -35,7 +35,7 @@ fun QualityIndicator(
     ) {
         Text(
             text = "质量: $text",
-            style = MaterialTheme.typography.labelSmall,
+            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
             color = color
         )
     }

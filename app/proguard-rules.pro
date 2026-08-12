@@ -42,3 +42,13 @@
 -keepclassmembers class kotlinx.coroutines.** {
     volatile <fields>;
 }
+
+# Miuix（HyperOS 风格 UI 组件库）
+# Miuix 打包了 compose-multiplatform 的 components-resources，其资源收集器
+# （Res / ExpectResourceCollectors）通过反射式的顶层属性访问，R8 全量裁剪后
+# 会在首帧渲染时抛 NoClassDefFoundError，故整体保留。
+-keep class top.yukonga.miuix.kmp.** { *; }
+-dontwarn top.yukonga.miuix.kmp.**
+-keep class org.jetbrains.compose.resources.** { *; }
+-dontwarn org.jetbrains.compose.resources.**
+

@@ -8,15 +8,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.xiaofeishu.audiostream.domain.model.ConnectionState
+import com.xiaofeishu.audiostream.ui.theme.AppColors
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 连接状态指示器。颜色取自主题，不再硬编码 hex。
@@ -27,11 +27,11 @@ fun ConnectionStatus(
     modifier: Modifier = Modifier
 ) {
     val (color, text) = when (state) {
-        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.error to "未连接"
-        ConnectionState.CONNECTING -> MaterialTheme.colorScheme.tertiary to "连接中…"
-        ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary to "已连接"
-        ConnectionState.PLAYING -> MaterialTheme.colorScheme.primary to "播放中"
-        ConnectionState.ERROR -> MaterialTheme.colorScheme.error to "错误"
+        ConnectionState.DISCONNECTED -> AppColors.error to "未连接"
+        ConnectionState.CONNECTING -> AppColors.warning to "连接中…"
+        ConnectionState.CONNECTED -> MiuixTheme.colorScheme.primary to "已连接"
+        ConnectionState.PLAYING -> MiuixTheme.colorScheme.primary to "播放中"
+        ConnectionState.ERROR -> AppColors.error to "错误"
     }
 
     Row(
@@ -45,6 +45,6 @@ fun ConnectionStatus(
                 .background(color)
         )
         Spacer(modifier = Modifier.width(8.dp))
-        Text(text = text, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = text, color = MiuixTheme.colorScheme.onSurface)
     }
 }
