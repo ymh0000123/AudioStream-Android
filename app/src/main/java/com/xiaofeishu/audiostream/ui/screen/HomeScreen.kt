@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.LargeTitle
 import com.xiaofeishu.audiostream.ui.component.contextClick
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
         ) {
+            LargeTitle(text = "主页")
             SmallTitle(
                 text = when {
                     servers.isNotEmpty() -> "发现的服务器 (${servers.size})"

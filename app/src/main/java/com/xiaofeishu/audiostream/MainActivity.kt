@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -39,10 +38,14 @@ import androidx.navigation.compose.rememberNavController
 import com.xiaofeishu.audiostream.service.AudioStreamService
 import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
 import com.xiaofeishu.audiostream.ui.screen.AboutScreen
+import com.xiaofeishu.audiostream.ui.screen.DataSettingsScreen
 import com.xiaofeishu.audiostream.ui.screen.HistoryScreen
 import com.xiaofeishu.audiostream.ui.screen.HomeScreen
+import com.xiaofeishu.audiostream.ui.screen.KeepAliveSettingsScreen
+import com.xiaofeishu.audiostream.ui.screen.PlaybackSettingsScreen
 import com.xiaofeishu.audiostream.ui.screen.PlayerScreen
 import com.xiaofeishu.audiostream.ui.screen.SettingsScreen
+import com.xiaofeishu.audiostream.ui.screen.VisualAndHapticsSettingsScreen
 import com.xiaofeishu.audiostream.ui.theme.AudioStreamTheme
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
 import com.xiaofeishu.audiostream.domain.repository.SettingsRepository
@@ -80,7 +83,8 @@ class MainActivity : ComponentActivity() {
                 LocalNavigationEventDispatcherOwner provides navEventOwner,
             ) {
                 val themeMode by settingsRepository.themeMode.collectAsState()
-                AudioStreamTheme(themeMode = themeMode) {
+                val darkMode by settingsRepository.darkMode.collectAsState()
+                AudioStreamTheme(darkMode = darkMode, themeMode = themeMode) {
                     val hapticFeedbackEnabled by settingsRepository.hapticFeedbackEnabled.collectAsState()
                     CompositionLocalProvider(
                         LocalHapticFeedbackEnabled provides hapticFeedbackEnabled
@@ -120,10 +124,13 @@ class MainActivity : ComponentActivity() {
 
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
-        // 关于页是设置页的二级页面，底栏仍高亮"设置"；找不到时兜底 0 避免 -1 越界。
+        // 设置页及其二级页面（关于页、各设置子页面）均高亮"设置"；找不到时兜底 0 避免 -1 越界。
         val selectedIndex = BottomNavItem.entries
             .indexOfFirst { it.route == currentRoute }
-            .let { if (it >= 0) it else if (currentRoute == Route.ABOUT.path) BottomNavItem.SETTINGS.ordinal else 0 }
+            .let { index ->
+                if (index >= 0) index
+                else if (isSettingsSubPage(currentRoute)) BottomNavItem.SETTINGS.ordinal else 0
+            }
 
         Scaffold(
             // 顶部 inset 由各屏幕的 TopAppBar 自己吃（miuix TopAppBar 内含 statusBars padding），
@@ -132,10 +139,10 @@ class MainActivity : ComponentActivity() {
             // 顶部就会多出一大片空白。
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                // 关于页是二级页面，不显示底部导航栏；隐藏时 bottomBar 高度归零，
-                // 关于页需自行处理 navigationBars inset（见 AboutScreen）。
+                // 设置子页面与关于页是二级页面，不显示底部导航栏；隐藏时 bottomBar 高度归零，
+                // 二级页面需自行处理 navigationBars inset（见 AboutScreen / SettingsSubScreens）。
                 AnimatedVisibility(
-                    visible = currentRoute != Route.ABOUT.path,
+                    visible = !isSettingsSubPage(currentRoute),
                     enter = slideInVertically(initialOffsetY = { it }) + expandVertically(),
                     exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically()
                 ) {
@@ -180,8 +187,45 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 composable(Route.PLAYER.path) { PlayerScreen(viewModel = playerViewModel) }
-                composable(Route.HISTORY.path) {
+                composable(Route.SETTINGS.path) {
+                    SettingsScreen(
+                        onNavigateToVisualAndHaptics = {
+                            navController.navigate(Route.SETTINGS_APPEARANCE.path)
+                        },
+                        onNavigateToPlayback = {
+                            navController.navigate(Route.SETTINGS_PLAYBACK.path)
+                        },
+                        onNavigateToKeepAlive = {
+                            navController.navigate(Route.SETTINGS_KEEPALIVE.path)
+                        },
+                        onNavigateToData = {
+                            navController.navigate(Route.SETTINGS_DATA.path)
+                        },
+                        onNavigateToAbout = {
+                            navController.navigate(Route.ABOUT.path)
+                        },
+                    )
+                }
+                composable(Route.SETTINGS_APPEARANCE.path) {
+                    VisualAndHapticsSettingsScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Route.SETTINGS_PLAYBACK.path) {
+                    PlaybackSettingsScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Route.SETTINGS_KEEPALIVE.path) {
+                    KeepAliveSettingsScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Route.SETTINGS_DATA.path) {
+                    DataSettingsScreen(
+                        onBack = { navController.popBackStack() },
+                        onNavigateToHistory = {
+                            navController.navigate(Route.SETTINGS_HISTORY.path)
+                        }
+                    )
+                }
+                composable(Route.SETTINGS_HISTORY.path) {
                     HistoryScreen(
+                        onBack = { navController.popBackStack() },
                         onConnect = { server ->
                             playerViewModel.connect(server)
                             ensureServiceRunning()
@@ -190,13 +234,6 @@ class MainActivity : ComponentActivity() {
                                 launchSingleTop = true
                                 restoreState = true
                             }
-                        }
-                    )
-                }
-                composable(Route.SETTINGS.path) {
-                    SettingsScreen(
-                        onNavigateToAbout = {
-                            navController.navigate(Route.ABOUT.path)
                         }
                     )
                 }
@@ -220,13 +257,22 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Route(val path: String) {
-    HOME("home"), PLAYER("player"), HISTORY("history"), SETTINGS("settings"), ABOUT("about");
+    HOME("home"), PLAYER("player"), SETTINGS("settings"),
+    SETTINGS_APPEARANCE("settings/appearance"),
+    SETTINGS_PLAYBACK("settings/playback"),
+    SETTINGS_KEEPALIVE("settings/keepalive"),
+    SETTINGS_DATA("settings/data"),
+    SETTINGS_HISTORY("settings/history"),
+    ABOUT("about");
     override fun toString() = path
 }
+
+/** 是否为设置页的二级页面（设置子页面 + 关于页）：隐藏底栏、底栏高亮"设置"。 */
+private fun isSettingsSubPage(route: String?): Boolean =
+    route == Route.ABOUT.path || route?.startsWith("settings/") == true
 
 private enum class BottomNavItem(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     HOME("home", "主页", Icons.Filled.Home),
     PLAYER("player", "播放", Icons.Filled.PlayArrow),
-    HISTORY("history", "历史", Icons.Filled.History),
     SETTINGS("settings", "设置", Icons.Filled.Settings);
 }

@@ -2,16 +2,22 @@ package com.xiaofeishu.audiostream.ui.screen
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.LargeTitle
 import com.xiaofeishu.audiostream.ui.component.contextClick
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
@@ -31,6 +36,7 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import androidx.compose.foundation.lazy.LazyColumn
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.text.SimpleDateFormat
@@ -38,10 +44,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 历史与收藏页。列出收藏服务器（可一键连接/取消收藏）和连接历史（可一键连接）。
+ * 历史与收藏页（设置 -> 数据管理 的二级页面）。列出收藏服务器（可一键连接/取消收藏）
+ * 和连接历史（可一键连接）。
  */
 @Composable
 fun HistoryScreen(
+    onBack: () -> Unit = {},
     onConnect: (ServerInfo) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -56,12 +64,38 @@ fun HistoryScreen(
         action()
     }
 
-    Scaffold { padding ->
+    Scaffold(
+        topBar = {
+            SmallTopAppBar(
+                title = "",
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            onBack()
+                        },
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "返回",
+                        )
+                    }
+                },
+            )
+        }
+    ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = padding.calculateTopPadding())
+                .padding(top = padding.calculateTopPadding()),
+            // 二级页面隐藏底部导航栏，系统手势条 inset 由这里自己吃
+            contentPadding = PaddingValues(
+                bottom = padding.calculateBottomPadding() +
+                    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
+            )
         ) {
+            item { LargeTitle(text = "历史") }
+
             if (savedServers.isNotEmpty()) {
                 item { SmallTitle(text = "收藏的服务器") }
                 items(savedServers.size, key = { savedServers[it].key }) { index ->

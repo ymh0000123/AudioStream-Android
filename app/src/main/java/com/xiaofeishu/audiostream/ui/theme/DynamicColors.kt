@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.xiaofeishu.audiostream.domain.model.ThemeMode
@@ -15,7 +16,10 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
  * 系统动态取色（Material You）和应用内置色板。
  *
  * 系统取色只读取 Android 12+ 的系统色板资源，不需要壁纸或存储权限；旧系统选择
- * “系统取色”时回退到靛蓝紫。手动色板不受系统版本限制。
+ * "系统取色"时回退到靛蓝紫。手动色板不受系统版本限制。
+ *
+ * 所有配色在生成后都会把中性表面槽位（背景/卡片/弹窗等）向主题色混入一点淡淡的
+ * 色相（见 [withPrimaryTint]），让组件整体带上主题色的氛围，又不影响文字对比度。
  */
 object DynamicColors {
 
@@ -24,9 +28,12 @@ object DynamicColors {
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     @Composable
-    fun scheme(mode: ThemeMode, darkTheme: Boolean): Colors = when (mode) {
-        ThemeMode.SYSTEM -> if (darkTheme) darkScheme() else lightScheme()
-        else -> if (darkTheme) manualDarkScheme(mode) else manualLightScheme(mode)
+    fun scheme(mode: ThemeMode, darkTheme: Boolean): Colors {
+        val base = when (mode) {
+            ThemeMode.SYSTEM -> if (darkTheme) darkScheme() else lightScheme()
+            else -> if (darkTheme) manualDarkScheme(mode) else manualLightScheme(mode)
+        }
+        return base.withPrimaryTint(if (darkTheme) DARK_TINT_ALPHA else LIGHT_TINT_ALPHA)
     }
 
     @Composable
@@ -42,6 +49,26 @@ object DynamicColors {
         val context = LocalContext.current
         return runCatching { buildDark(context.systemPalette()) }.getOrElse { BrandDarkColors }
     }
+}
+
+/** 中性表面混入主题色的强度：浅色略淡、深色略强（数值小，保持"淡淡"的氛围感）。 */
+private const val LIGHT_TINT_ALPHA = 0.05f
+private const val DARK_TINT_ALPHA = 0.07f
+
+/**
+ * 把中性表面槽位向 [primary] 混入一点主题色，背景/卡片/顶栏/弹窗等组件
+ * 因此都带上一丝淡淡的品牌色；文字与强调色槽位保持不变。
+ */
+private fun Colors.withPrimaryTint(alpha: Float): Colors {
+    fun tint(color: Color): Color = lerp(color, primary, alpha)
+    return copy(
+        background = tint(background),
+        surface = tint(surface),
+        surfaceVariant = tint(surfaceVariant),
+        surfaceContainer = tint(surfaceContainer),
+        surfaceContainerHigh = tint(surfaceContainerHigh),
+        surfaceContainerHighest = tint(surfaceContainerHighest),
+    )
 }
 
 /** 系统色板的一组取样。数字越小越浅，越大越深。 */

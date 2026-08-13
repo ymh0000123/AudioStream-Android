@@ -2,12 +2,15 @@ package com.xiaofeishu.audiostream.ui.screen
 
 import android.content.Intent
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,7 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.runtime.Composable
@@ -53,6 +58,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.BuildConfig
+import com.xiaofeishu.audiostream.R
+import com.xiaofeishu.audiostream.data.update.UpdateInfo
 import com.xiaofeishu.audiostream.ui.component.LocalEnableBlur
 import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
 import com.xiaofeishu.audiostream.ui.component.contextClick
@@ -61,6 +68,8 @@ import com.xiaofeishu.audiostream.ui.effect.BgEffectBackground
 import com.xiaofeishu.audiostream.viewmodel.UpdateUiState
 import com.xiaofeishu.audiostream.viewmodel.UpdateViewModel
 import kotlinx.coroutines.flow.onEach
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -78,6 +87,7 @@ import top.yukonga.miuix.kmp.blur.isRenderEffectSupported
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles
@@ -193,6 +203,10 @@ private fun AboutContent(
     val heroBlendColors = remember(isDark) { heroBlendColors(isDark) }
     val cardBlendColors = remember(isDark) { aboutCardBlendToken(isDark) }
 
+    // 检查更新：弹窗只响应用户手动触发（进入页面时的自动检查只更新"版本发布"行状态，不弹窗）
+    var downloadOptions by remember { mutableStateOf<UpdateInfo?>(null) }
+    var updateDialogRequested by remember { mutableStateOf(false) }
+
     var logoAreaY by remember { mutableFloatStateOf(0f) }
     var projectNameY by remember { mutableFloatStateOf(0f) }
     var versionCodeY by remember { mutableFloatStateOf(0f) }
@@ -200,14 +214,14 @@ private fun AboutContent(
     var versionCodeProgress by remember { mutableFloatStateOf(0f) }
     var initialLogoAreaY by remember { mutableFloatStateOf(0f) }
 
-    // 版本发布行右侧文本:检查中 "..."、有结果展示最新版本、失败展示错误
+    // 版本发布行右侧状态文本：检查中 "…"、有结果展示最新版本、失败展示错误
     val currentUpdateState = updateState
-    val releaseStatusText = when (currentUpdateState) {
+    val updateStatusText = when (currentUpdateState) {
         UpdateUiState.Idle -> null
-        UpdateUiState.Checking -> "..."
-        is UpdateUiState.Available -> currentUpdateState.info.versionName
-        is UpdateUiState.UpToDate -> currentUpdateState.latestVersion
-        is UpdateUiState.Error -> "错误"
+        UpdateUiState.Checking -> "检查中…"
+        is UpdateUiState.Available -> "发现新版本 ${currentUpdateState.info.versionName}"
+        is UpdateUiState.UpToDate -> "已是最新"
+        is UpdateUiState.Error -> "检查失败"
     }
 
     LaunchedEffect(lazyListState) {
@@ -433,8 +447,9 @@ private fun AboutContent(
                         )
                         ArrowPreference(
                             title = "版本发布",
+                            summary = "v${BuildConfig.VERSION_NAME}",
                             endActions = {
-                                releaseStatusText?.let {
+                                updateStatusText?.let {
                                     Text(
                                         text = it,
                                         fontSize = textStyles.body2.fontSize,
@@ -442,9 +457,17 @@ private fun AboutContent(
                                     )
                                 }
                             },
+                            enabled = updateState != UpdateUiState.Checking,
                             onClick = {
                                 haptic.contextClick(hapticEnabled)
-                                openUrl(context, RELEASES_URL)
+                                updateDialogRequested = true
+                                // 已有检查结果直接展示；否则触发网络检查
+                                if (updateState !is UpdateUiState.Available &&
+                                    updateState !is UpdateUiState.UpToDate &&
+                                    updateState !is UpdateUiState.Error
+                                ) {
+                                    updateViewModel.checkForUpdates()
+                                }
                             },
                         )
                     }
@@ -489,6 +512,219 @@ private fun AboutContent(
                 }
             }
         }
+    }
+
+    // 更新弹窗：仅在用户手动点击"版本发布"后展示
+    if (updateDialogRequested) {
+        UpdateDialogs(
+            context = context,
+            updateState = updateState,
+            downloadOptions = downloadOptions,
+            onDownloadOptionsChange = { downloadOptions = it },
+            updateViewModel = updateViewModel,
+        )
+    }
+}
+
+/**
+ * 更新相关弹窗。
+ *
+ * 关键约束：Miuix 0.9.1 的 OverlayDialog 基于独立的 show 布尔状态驱动，
+ * 这里全程只使用一个 OverlayDialog 与一个 show 状态，内容按 [UpdateUiState] 分支渲染，
+ * 避免同一帧出现多个弹窗互相干扰。
+ */
+@Composable
+private fun UpdateDialogs(
+    context: android.content.Context,
+    updateState: UpdateUiState,
+    downloadOptions: UpdateInfo?,
+    onDownloadOptionsChange: (UpdateInfo?) -> Unit,
+    updateViewModel: UpdateViewModel
+) {
+    val show = remember { mutableStateOf(false) }
+
+    // 有内容可展示时才打开：下载方式选择优先于版本详情
+    val hasContent = downloadOptions != null ||
+        updateState is UpdateUiState.Available ||
+        updateState is UpdateUiState.UpToDate ||
+        updateState is UpdateUiState.Error
+    LaunchedEffect(hasContent) {
+        show.value = hasContent
+    }
+
+    // 统一关闭入口：复位 show 状态 + 清业务状态
+    val dismissAll: () -> Unit = {
+        show.value = false
+        onDownloadOptionsChange(null)
+        updateViewModel.dismissResult()
+    }
+
+    if (!hasContent) return
+
+    val selectedDownload = downloadOptions
+    val title = when {
+        selectedDownload != null -> context.getString(R.string.download_method_title)
+        updateState is UpdateUiState.Available ->
+            context.getString(R.string.update_available_title)
+        updateState is UpdateUiState.UpToDate ->
+            context.getString(R.string.already_latest_title)
+        else -> context.getString(R.string.update_check_failed_title)
+    }
+
+    OverlayDialog(
+        show = show.value,
+        title = title,
+        onDismissRequest = dismissAll
+    ) {
+        when {
+            selectedDownload != null -> DownloadMethodContent(
+                context = context,
+                info = selectedDownload,
+                onPicked = { url ->
+                    openUrl(context, url)
+                    dismissAll()
+                },
+                onCancel = dismissAll
+            )
+
+            updateState is UpdateUiState.Available -> AvailableContent(
+                context = context,
+                info = updateState.info,
+                onCancel = dismissAll,
+                onConfirm = {
+                    if (updateState.info.mirrorDownloadUrl == null) {
+                        openUrl(context, updateState.info.downloadUrl)
+                        dismissAll()
+                    } else {
+                        // 切到下载方式选择：复用同一个弹窗，不新建 SuperDialog
+                        onDownloadOptionsChange(updateState.info)
+                    }
+                }
+            )
+
+            updateState is UpdateUiState.UpToDate -> Column {
+                Text(
+                    text = context.getString(
+                        R.string.already_latest_desc,
+                        BuildConfig.VERSION_NAME
+                    ),
+                    fontSize = textStyles.body2.fontSize,
+                    color = colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        openUrl(context, RELEASES_URL)
+                        dismissAll()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("查看版本发布")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = dismissAll,
+                    colors = ButtonDefaults.buttonColorsPrimary(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(context.getString(R.string.close))
+                }
+            }
+
+            updateState is UpdateUiState.Error -> Column {
+                Text(
+                    text = updateState.message,
+                    fontSize = textStyles.body2.fontSize,
+                    color = colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                DialogButtonRow(
+                    cancelText = context.getString(R.string.close),
+                    confirmText = context.getString(R.string.retry),
+                    onCancel = dismissAll,
+                    onConfirm = {
+                        show.value = false
+                        updateViewModel.checkForUpdates()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadMethodContent(
+    context: android.content.Context,
+    info: UpdateInfo,
+    onPicked: (String) -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = context.getString(R.string.download_method_desc),
+            fontSize = textStyles.body2.fontSize,
+            color = colorScheme.onSurfaceVariantSummary
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        info.mirrorDownloadUrl?.let { mirrorUrl ->
+            Button(
+                onClick = { onPicked(mirrorUrl) },
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(context.getString(R.string.download_via_mirror))
+            }
+        }
+        Button(
+            onClick = { onPicked(info.downloadUrl) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(context.getString(R.string.download_via_github))
+        }
+        Button(
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(context.getString(R.string.cancel))
+        }
+    }
+}
+
+@Composable
+private fun AvailableContent(
+    context: android.content.Context,
+    info: UpdateInfo,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Column {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 280.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(context.getString(R.string.latest_version, info.versionName))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = context.getString(R.string.update_notes),
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = info.releaseNotes.ifBlank {
+                    context.getString(R.string.no_release_notes)
+                },
+                fontSize = textStyles.body2.fontSize,
+                color = colorScheme.onSurfaceVariantSummary
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        DialogButtonRow(
+            cancelText = context.getString(R.string.cancel),
+            confirmText = context.getString(R.string.download_update),
+            onCancel = onCancel,
+            onConfirm = onConfirm
+        )
     }
 }
 

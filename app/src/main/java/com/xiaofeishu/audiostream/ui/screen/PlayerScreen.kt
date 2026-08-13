@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.domain.model.ConnectionState
 import com.xiaofeishu.audiostream.domain.model.MediaAction
 import com.xiaofeishu.audiostream.ui.component.ConnectionStatus
+import com.xiaofeishu.audiostream.ui.component.LargeTitle
 import com.xiaofeishu.audiostream.ui.component.QualityIndicator
 import com.xiaofeishu.audiostream.ui.component.StatsBar
 import com.xiaofeishu.audiostream.ui.component.SteppedSlider
@@ -100,6 +101,7 @@ fun PlayerScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(top = padding.calculateTopPadding())
         ) {
+            LargeTitle(text = "播放")
             ConnectionStatus(
                 state = state.connectionState,
                 modifier = Modifier

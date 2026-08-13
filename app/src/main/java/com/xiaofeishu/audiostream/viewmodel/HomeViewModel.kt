@@ -3,6 +3,7 @@ package com.xiaofeishu.audiostream.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
+import com.xiaofeishu.audiostream.domain.model.DarkMode
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
@@ -78,6 +79,9 @@ class HomeViewModel @Inject constructor(
     /** 当前应用配色方案。 */
     val themeMode: StateFlow<ThemeMode> = settingsRepository.themeMode
 
+    /** 当前深色模式：跟随系统 / 强制深色 / 强制浅色。 */
+    val darkMode: StateFlow<DarkMode> = settingsRepository.darkMode
+
     /** 是否启用主要交互的触感反馈。默认开启。 */
     val hapticFeedbackEnabled: StateFlow<Boolean> = settingsRepository.hapticFeedbackEnabled
 
@@ -119,6 +123,10 @@ class HomeViewModel @Inject constructor(
 
     fun saveThemeMode(mode: ThemeMode) {
         viewModelScope.launch { settingsRepository.saveThemeMode(mode) }
+    }
+
+    fun saveDarkMode(mode: DarkMode) {
+        viewModelScope.launch { settingsRepository.saveDarkMode(mode) }
     }
 
     fun clearHistory() {

@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
+import com.xiaofeishu.audiostream.domain.model.DarkMode
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
 import com.xiaofeishu.audiostream.domain.model.ThemeMode
@@ -33,6 +34,7 @@ private val KEY_LATENCY_MODE = intPreferencesKey("latency_mode")
 private val KEY_HIDE_SINK_LATENCY_HINT = booleanPreferencesKey("hide_sink_latency_hint")
 private val KEY_HAPTIC_FEEDBACK_ENABLED = booleanPreferencesKey("haptic_feedback_enabled")
 private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
+private val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
 /**
  * 持久化设置仓库实现。
  *
@@ -76,6 +78,10 @@ class SettingsRepositoryImpl @Inject constructor(
     override val themeMode: StateFlow<ThemeMode> = dataStore.data
         .map { prefs -> ThemeMode.fromWire(prefs[KEY_THEME_MODE]) }
         .stateIn(appScope, SharingStarted.Eagerly, ThemeMode.SYSTEM)
+
+    override val darkMode: StateFlow<DarkMode> = dataStore.data
+        .map { prefs -> DarkMode.fromWire(prefs[KEY_DARK_MODE]) }
+        .stateIn(appScope, SharingStarted.Eagerly, DarkMode.SYSTEM)
 
     override val preferredProtocol: Flow<Protocol> = dataStore.data
         .map { prefs -> Protocol.fromWire(prefs[KEY_PROTOCOL]) }
@@ -127,6 +133,10 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveThemeMode(mode: ThemeMode) {
         dataStore.edit { prefs -> prefs[KEY_THEME_MODE] = mode.wireValue }
+    }
+
+    override suspend fun saveDarkMode(mode: DarkMode) {
+        dataStore.edit { prefs -> prefs[KEY_DARK_MODE] = mode.wireValue }
     }
 
     override suspend fun savePreferredProtocol(protocol: Protocol) {

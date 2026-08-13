@@ -1,6 +1,7 @@
 package com.xiaofeishu.audiostream.domain.repository
 
 import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
+import com.xiaofeishu.audiostream.domain.model.DarkMode
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
 import com.xiaofeishu.audiostream.domain.model.ThemeMode
@@ -30,6 +31,10 @@ interface SettingsRepository {
 
     /** 应用配色方案。 */
     val themeMode: StateFlow<ThemeMode>
+
+    /** 深色模式：跟随系统 / 强制深色 / 强制浅色。 */
+    val darkMode: StateFlow<DarkMode>
+
     /** 是否忽略播放页的蓝牙链路延迟警告提示。 */
     val hideSinkLatencyHint: StateFlow<Boolean>
     /** 默认协议偏好。 */
@@ -49,6 +54,7 @@ interface SettingsRepository {
     suspend fun saveHapticFeedbackEnabled(enabled: Boolean)
     suspend fun saveHideSinkLatencyHint(hidden: Boolean)
     suspend fun saveThemeMode(mode: ThemeMode)
+    suspend fun saveDarkMode(mode: DarkMode)
     suspend fun savePreferredProtocol(protocol: Protocol)
     suspend fun addConnection(record: ConnectionRecord)
     suspend fun clearHistory()
