@@ -5,7 +5,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
+import com.xiaofeishu.audiostream.ui.component.LocalEnableBlur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -20,9 +23,10 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun AudioStreamTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DynamicColors.darkScheme() else DynamicColors.lightScheme()
+    val colorScheme = DynamicColors.scheme(themeMode, darkTheme)
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -34,10 +38,12 @@ fun AudioStreamTheme(
         }
     }
 
-    MiuixTheme(
-        colors = colorScheme,
-        content = content
-    )
+    CompositionLocalProvider(LocalEnableBlur provides true) {
+        MiuixTheme(
+            colors = colorScheme,
+            content = content
+        )
+    }
 }
 
 /** 语义色：Miuix 配色表没有 error/warning 槽位，集中在此定义供各屏复用。 */

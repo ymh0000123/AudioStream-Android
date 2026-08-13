@@ -12,7 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.unit.dp
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
 import top.yukonga.miuix.kmp.basic.Card
@@ -37,7 +37,7 @@ fun ServerCard(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .clickable(onClick = onClick),
-        insideMargin = DpSize(16.dp, 16.dp)
+        insideMargin = PaddingValues(16.dp, 16.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

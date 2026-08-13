@@ -59,10 +59,10 @@ if not exist "xiaofeishu.keystore" (
     echo 签名密钥已生成
 )
 
-REM 清理并编译
+REM 保留增量构建产物并编译；需要排查缓存问题时再手动运行 gradlew.bat clean
 echo.
 echo 正在编译 %BUILD_TYPE% APK...
-call gradlew.bat clean assemble%BUILD_TYPE%
+call gradlew.bat assemble%BUILD_TYPE%
 
 if errorlevel 1 (
     echo 编译失败

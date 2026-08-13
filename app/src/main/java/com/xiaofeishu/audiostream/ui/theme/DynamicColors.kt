@@ -6,24 +6,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
 import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 
 /**
- * 系统动态取色（Material You）。
+ * 系统动态取色（Material You）和应用内置色板。
  *
- * Miuix 自身没有动态取色能力，这里读取 Android 12+ 由系统从壁纸生成的色板资源
- * （android.R.color.system_accent1_*），注入 Miuix 配色表的品牌色槽位。
- *
- * 取色只走系统色板资源，不调用 WallpaperManager.getWallpaperColors()，
- * 因此不需要任何存储权限、不会弹授权框；Android 11 及以下直接回退品牌色。
+ * 系统取色只读取 Android 12+ 的系统色板资源，不需要壁纸或存储权限；旧系统选择
+ * “系统取色”时回退到靛蓝紫。手动色板不受系统版本限制。
  */
 object DynamicColors {
 
     /** 系统色板需要 Android 12（S, API 31）。 */
     val isSupported: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    @Composable
+    fun scheme(mode: ThemeMode, darkTheme: Boolean): Colors = when (mode) {
+        ThemeMode.SYSTEM -> if (darkTheme) darkScheme() else lightScheme()
+        else -> if (darkTheme) manualDarkScheme(mode) else manualLightScheme(mode)
+    }
 
     @Composable
     fun lightScheme(): Colors {
@@ -40,10 +44,7 @@ object DynamicColors {
     }
 }
 
-/**
- * 系统色板的一组取样。数字越小越浅（accent1_50 接近白），越大越深。
- * 命名沿用 AOSP 的 tone 语义，便于对照系统资源。
- */
+/** 系统色板的一组取样。数字越小越浅，越大越深。 */
 private data class SystemPalette(
     val accent100: Color,
     val accent200: Color,
@@ -68,10 +69,7 @@ private fun android.content.Context.systemPalette(): SystemPalette {
     )
 }
 
-/**
- * 只覆盖与品牌色强相关的槽位（primary / primaryContainer / tertiaryContainer），
- * 其余留用 Miuix 默认值，避免破坏 HyperOS 的中性灰层次与控件观感。
- */
+/** 只覆盖品牌色相关槽位，保留 Miuix 默认的中性色层次。 */
 private fun buildLight(p: SystemPalette): Colors = lightColorScheme(
     primary = p.accent600,
     onPrimary = Color.White,
@@ -98,25 +96,70 @@ private fun buildDark(p: SystemPalette): Colors = darkColorScheme(
     onBackgroundVariant = p.neutralVariant,
 )
 
-/** Android 11 及以下、或取色失败时的回退配色：品牌靛蓝紫。 */
-internal val BrandLightColors: Colors = lightColorScheme(
-    primary = Color(0xFF667EEA),
-    onPrimary = Color.White,
-    primaryVariant = Color(0xFF667EEA),
-    primaryContainer = Color(0xFF7B8FF0),
-    onPrimaryContainer = Color.White,
-    tertiaryContainer = Color(0xFFE8EAF6),
-    onTertiaryContainer = Color(0xFF667EEA),
-    tertiaryContainerVariant = Color(0xFFE8EAF6),
+private data class ManualPalette(
+    val lightPrimary: Color,
+    val lightContainer: Color,
+    val lightTertiary: Color,
+    val lightOnTertiary: Color,
+    val darkPrimary: Color,
+    val darkContainer: Color,
+    val darkTertiary: Color,
+    val darkOnTertiary: Color,
 )
 
-internal val BrandDarkColors: Colors = darkColorScheme(
-    primary = Color(0xFF8B9CF7),
-    onPrimary = Color.White,
-    primaryVariant = Color(0xFF8B9CF7),
-    primaryContainer = Color(0xFF6C7FD8),
-    onPrimaryContainer = Color.White,
-    tertiaryContainer = Color(0xFF2A2A4A),
-    onTertiaryContainer = Color(0xFF8B9CF7),
-    tertiaryContainerVariant = Color(0xFF2A2A4A),
-)
+private fun palette(mode: ThemeMode): ManualPalette = when (mode) {
+    ThemeMode.OCEAN -> ManualPalette(
+        Color(0xFF1565C0), Color(0xFF1976D2), Color(0xFFE0F2F1), Color(0xFF00695C),
+        Color(0xFF82B1FF), Color(0xFF255CA8), Color(0xFF134E4A), Color(0xFF99F6E4),
+    )
+    ThemeMode.TEAL -> ManualPalette(
+        Color(0xFF008577), Color(0xFF009688), Color(0xFFE3F2FD), Color(0xFF1565C0),
+        Color(0xFF5EEAD4), Color(0xFF0F766E), Color(0xFF1E3A5F), Color(0xFFBFDBFE),
+    )
+    ThemeMode.ORANGE -> ManualPalette(
+        Color(0xFFE65100), Color(0xFFF57C00), Color(0xFFE8F5E9), Color(0xFF2E7D32),
+        Color(0xFFFFAB70), Color(0xFFB45309), Color(0xFF23452D), Color(0xFF86EFAC),
+    )
+    ThemeMode.PINK -> ManualPalette(
+        Color(0xFFC2185B), Color(0xFFD81B60), Color(0xFFEDE7F6), Color(0xFF6A1B9A),
+        Color(0xFFFF80AB), Color(0xFFAD1457), Color(0xFF3B2853), Color(0xFFD8B4FE),
+    )
+    else -> ManualPalette(
+        Color(0xFF667EEA), Color(0xFF7B8FF0), Color(0xFFE8EAF6), Color(0xFF667EEA),
+        Color(0xFF8B9CF7), Color(0xFF6C7FD8), Color(0xFF2A2A4A), Color(0xFF8B9CF7),
+    )
+}
+
+private fun manualLightScheme(mode: ThemeMode): Colors {
+    val p = palette(mode)
+    return lightColorScheme(
+        primary = p.lightPrimary,
+        onPrimary = Color.White,
+        primaryVariant = p.lightPrimary,
+        primaryContainer = p.lightContainer,
+        onPrimaryContainer = Color.White,
+        disabledPrimarySlider = p.lightPrimary.copy(alpha = 0.35f),
+        tertiaryContainer = p.lightTertiary,
+        onTertiaryContainer = p.lightOnTertiary,
+        tertiaryContainerVariant = p.lightTertiary,
+    )
+}
+
+private fun manualDarkScheme(mode: ThemeMode): Colors {
+    val p = palette(mode)
+    return darkColorScheme(
+        primary = p.darkPrimary,
+        onPrimary = Color.Black,
+        primaryVariant = p.darkPrimary,
+        primaryContainer = p.darkContainer,
+        onPrimaryContainer = Color.White,
+        disabledPrimarySlider = p.darkPrimary.copy(alpha = 0.35f),
+        tertiaryContainer = p.darkTertiary,
+        onTertiaryContainer = p.darkOnTertiary,
+        tertiaryContainerVariant = p.darkTertiary,
+    )
+}
+
+/** Android 11 及以下选择系统取色、或动态取色失败时的回退配色。 */
+internal val BrandLightColors: Colors = manualLightScheme(ThemeMode.INDIGO)
+internal val BrandDarkColors: Colors = manualDarkScheme(ThemeMode.INDIGO)

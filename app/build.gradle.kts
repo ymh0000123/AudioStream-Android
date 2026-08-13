@@ -36,12 +36,12 @@ val appVersionCode = (findProperty("appVersionCode") as? String)
 
 android {
     namespace = "com.xiaofeishu.audiostream"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.xiaofeishu.audiostream"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
         buildConfigField(
@@ -105,8 +105,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
@@ -123,7 +125,7 @@ android {
 
 dependencies {
     // Compose BOM
-    val composeBom = platform("androidx.compose:compose-bom:2024.09.02")
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -131,9 +133,13 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Miuix（HyperOS 风格组件库）。0.2.9 是最后一个基于 Kotlin 2.0.21 + Compose 1.7.0 的版本，
-    // 与本项目版本矩阵对齐；升级 Miuix 需同步升 Kotlin/Compose，勿单独提版本。
-    implementation("top.yukonga.miuix.kmp:miuix-android:0.2.9")
+    // Miuix（HyperOS 风格组件库）。0.9.x 拆分为 KMP 多模块：ui 主库 + blur（毛玻璃/流光背景）
+    // + preference（ArrowPreference/SwitchPreference）+ icons。0.9.1 对应 Kotlin 2.3.x，
+    // 0.9.2+ 需要 Kotlin 2.4（无配套 KSP，会破坏 Hilt），故锁 0.9.1。
+    implementation("top.yukonga.miuix.kmp:miuix-ui:0.9.1")
+    implementation("top.yukonga.miuix.kmp:miuix-blur:0.9.1")
+    implementation("top.yukonga.miuix.kmp:miuix-preference:0.9.1")
+    implementation("top.yukonga.miuix.kmp:miuix-icons:0.9.1")
 
     // Activity & Lifecycle
     implementation("androidx.activity:activity-compose:1.9.2")
@@ -141,12 +147,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")
 
+    // NavigationEvent：miuix 0.9.x 的 OverlayDialog/弹窗组件内部依赖它做返回手势分发，
+    // 由 miuix-ui 传递引入，但我们在根组合中直接使用其 API 提供 dispatcher，故显式声明。
+    implementation("androidx.navigationevent:navigationevent-compose:1.1.1")
+
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.8.0")
 
     // Hilt
-    implementation("com.google.dagger:hilt-android:2.50")
-    ksp("com.google.dagger:hilt-compiler:2.50")
+    implementation("com.google.dagger:hilt-android:2.58")
+    ksp("com.google.dagger:hilt-compiler:2.58")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
 
     // Networking - OkHttp

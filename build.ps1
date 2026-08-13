@@ -150,15 +150,7 @@ $normalizedVersionName = $VersionName -replace '^[vV]', ''
 Write-Host ""
 Write-Host "📋 版本: $normalizedVersionName (code: $VersionCode) [$versionSource]" -ForegroundColor Yellow
 
-# 步骤 3: 清理旧构建
-Write-Host ""
-Write-Host "🧹 正在清理旧构建..." -ForegroundColor Yellow
-& .\gradlew.bat clean
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ 清理失败" -ForegroundColor Red
-    Pause-Exit 1
-}
-
+# 步骤 3: 默认保留增量构建产物；需要排查缓存问题时再手动运行 .\gradlew.bat clean。
 # 步骤 4: 编译 APK
 Write-Host ""
 Write-Host "🔨 正在编译 $BuildType APK..." -ForegroundColor Green

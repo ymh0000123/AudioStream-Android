@@ -7,16 +7,17 @@
 AudioStream（小废鼠 AudioStream）是一个 Android 原生音频流播放客户端。App 通过 **WebSocket** 协议连接到音频流服务器，接收 PCM 音频数据并通过 `AudioTrack` 实时播放；通过 **mDNS** 在局域网内自动发现可用的流服务器。播放由前台服务保活（通知栏媒体控制 + WakeLock/WifiLock），支持自动重连、连接历史、收藏服务器、码率切换、连接质量统计，以及基于 GitHub Release 的应用内更新检查（含镜像下载）。
 
 - 包名 / 应用 ID：`com.xiaofeishu.audiostream`
-- minSdk 26 / targetSdk 35 / compileSdk 35
+- minSdk 26 / targetSdk 37 / compileSdk 37（miuix-blur 0.9.x 声明 minSdk 32，Manifest 用 overrideLibrary 放行，低版本运行时自动回退无毛玻璃）
 - 单 module 结构（`:app`），无子模块
 - 版本号由 Gradle 属性 `appVersionName` / `appVersionCode` 注入（CI 从 release tag 推导），本地构建有默认值
 
 ## 技术栈
 
-- **语言**：Kotlin 2.0.21，JVM target 17
-- **构建**：Gradle 8.11.1（Kotlin DSL，`build.gradle.kts`），AGP 8.9.1
-- **UI**：Jetpack Compose（BOM 2024.09.02）+ Material3 + Navigation Compose
-- **DI**：Hilt 2.50（KSP 2.0.21-1.0.27）
+- **语言**：Kotlin 2.3.21，JVM target 17
+- **构建**：Gradle 8.14（Kotlin DSL，`build.gradle.kts`），AGP 8.13.2
+- **UI**：Jetpack Compose（BOM 2026.06.01）+ Material3 + Navigation Compose
+- **DI**：Hilt 2.58（KSP 2.3.11）
+- **组件库**：Miuix 0.9.1（KMP 多模块：`miuix-ui` + `miuix-blur` + `miuix-preference` + `miuix-icons`）。0.9.1 对应 Kotlin 2.3.x；**0.9.2+ 需要 Kotlin 2.4（无配套 KSP，会破坏 Hilt），勿单独升级**
 - **网络**：OkHttp 4.12.0（WebSocket，10s ping 保活）
 - **序列化**：Gson 2.10.1
 - **持久化**：Jetpack DataStore Preferences
@@ -31,11 +32,11 @@ AudioStream（小废鼠 AudioStream）是一个 Android 原生音频流播放客
 环境要求：JDK 17、Android SDK（`ANDROID_HOME`）、`JAVA_HOME` 已设置。
 
 ```bash
-# 清理 + 编译 release（默认）
-./gradlew clean assembleRelease
+# 增量编译 release（默认，日常构建不要先 clean）
+./gradlew assembleRelease
 
-# 编译 debug
-./gradlew clean assembleDebug
+# 增量编译 debug
+./gradlew assembleDebug
 
 # 或使用项目自带的封装脚本（会自动生成缺失的签名密钥）
 ./build.ps1              # PowerShell，默认 release；./build.ps1 -BuildType debug

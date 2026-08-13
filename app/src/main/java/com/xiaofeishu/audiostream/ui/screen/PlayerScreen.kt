@@ -20,6 +20,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.contextClick
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,12 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.domain.model.ConnectionState
 import com.xiaofeishu.audiostream.domain.model.MediaAction
-import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.ui.component.ConnectionStatus
 import com.xiaofeishu.audiostream.ui.component.QualityIndicator
 import com.xiaofeishu.audiostream.ui.component.StatsBar
@@ -45,6 +47,7 @@ import com.xiaofeishu.audiostream.ui.theme.AppColors
 import com.xiaofeishu.audiostream.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -52,7 +55,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 码率固定档位（kbps），从低到高。 */
@@ -63,6 +66,8 @@ fun PlayerScreen(
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val haptic = LocalHapticFeedback.current
+    val hapticEnabled = LocalHapticFeedbackEnabled.current
     val mediaState = state.mediaState
 
     var currentPositionMs by remember { mutableLongStateOf(mediaState?.positionMs ?: 0L) }
@@ -88,13 +93,7 @@ fun PlayerScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            AppTopBar(
-                title = "播放"
-            )
-        }
-    ) { padding ->
+    Scaffold { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -130,7 +129,7 @@ fun PlayerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp),
-                    insideMargin = DpSize(16.dp, 16.dp)
+                    insideMargin = PaddingValues(16.dp, 16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -164,7 +163,7 @@ fun PlayerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp),
-                    insideMargin = DpSize(16.dp, 16.dp)
+                    insideMargin = PaddingValues(16.dp, 16.dp)
                 ) {
                     val ms = state.mediaState
                     if (ms != null && (ms.title.isNotEmpty() || ms.artist.isNotEmpty())) {
@@ -193,12 +192,11 @@ fun PlayerScreen(
                     if (ms != null && ms.durationMs > 0) {
                         val duration = ms.durationMs.toFloat().coerceAtLeast(1f)
                         Slider(
-                            progress = currentPositionMs.toFloat().coerceIn(0f, duration),
-                            minValue = 0f,
-                            maxValue = duration,
+                            value = currentPositionMs.toFloat().coerceIn(0f, duration),
+                            valueRange = 0f..duration,
                             // Miuix 的 Slider 没有 onValueChangeFinished，进度条改为拖动即定位；
                             // 服务端 seek 有节流，短时间多次请求不会造成压力。
-                            onProgressChange = { value ->
+                            onValueChange = { value ->
                                 currentPositionMs = value.toLong()
                                 viewModel.seekTo(currentPositionMs)
                             },
@@ -228,7 +226,10 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { viewModel.sendCommand(MediaAction.PREVIOUS) }) {
+                        IconButton(onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            viewModel.sendCommand(MediaAction.PREVIOUS)
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.SkipPrevious,
                                 contentDescription = "上一曲",
@@ -236,7 +237,10 @@ fun PlayerScreen(
                             )
                         }
                         IconButton(
-                            onClick = { viewModel.sendCommand(MediaAction.PLAY_PAUSE) },
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                viewModel.sendCommand(MediaAction.PLAY_PAUSE)
+                            },
                             backgroundColor = MiuixTheme.colorScheme.primary,
                             minWidth = 56.dp,
                             minHeight = 56.dp
@@ -252,7 +256,10 @@ fun PlayerScreen(
                                 modifier = Modifier.size(28.dp)
                             )
                         }
-                        IconButton(onClick = { viewModel.sendCommand(MediaAction.NEXT) }) {
+                        IconButton(onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            viewModel.sendCommand(MediaAction.NEXT)
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.SkipNext,
                                 contentDescription = "下一曲",
@@ -281,10 +288,14 @@ fun PlayerScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
-                            text = if (serverMuted) "电脑已静音，点击恢复" else "静音电脑（手机继续播放）",
-                            onClick = { viewModel.setServerMute(!serverMuted) },
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                viewModel.setServerMute(!serverMuted)
+                            },
                             modifier = Modifier.weight(1f)
-                        )
+                        ) {
+                            Text(if (serverMuted) "电脑已静音，点击恢复" else "静音电脑（手机继续播放）")
+                        }
                     }
                 }
             }
@@ -296,12 +307,15 @@ fun PlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
-                insideMargin = DpSize(16.dp, 16.dp)
+                insideMargin = PaddingValues(16.dp, 16.dp)
             ) {
                 SteppedSlider(
                     values = BITRATE_PRESETS,
                     currentValue = state.currentBitrate,
-                    onValueCommitted = viewModel::setBitrate,
+                    onValueCommitted = { bitrate ->
+                        haptic.contextClick(hapticEnabled)
+                        viewModel.setBitrate(bitrate)
+                    },
                     valueLabel = { "$it kbps" },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -314,13 +328,12 @@ fun PlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
-                insideMargin = DpSize(16.dp, 16.dp)
+                insideMargin = PaddingValues(16.dp, 16.dp)
             ) {
                 Slider(
-                    progress = state.volume,
-                    minValue = 0f,
-                    maxValue = 1f,
-                    onProgressChange = viewModel::setVolume,
+                    value = state.volume,
+                    valueRange = 0f..1f,
+                    onValueChange = viewModel::setVolume,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -332,11 +345,14 @@ fun PlayerScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
             ) {
-                SuperSwitch(
-                    title = "自动重连",
-                    summary = "断开后自动尝试重新连接",
+                SwitchPreference(
                     checked = state.autoReconnect,
-                    onCheckedChange = viewModel::setAutoReconnect
+                    onCheckedChange = { enabled ->
+                        haptic.contextClick(hapticEnabled)
+                        viewModel.setAutoReconnect(enabled)
+                    },
+                    title = "自动重连",
+                    summary = "断开后自动尝试重新连接"
                 )
             }
 
@@ -345,31 +361,43 @@ fun PlayerScreen(
             when (state.connectionState) {
                 ConnectionState.DISCONNECTED, ConnectionState.ERROR -> {
                     Button(
-                        text = "开始连接",
-                        submit = true,
-                        onClick = viewModel::reconnectPending,
+                        onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            viewModel.reconnectPending()
+                        },
+                        colors = ButtonDefaults.buttonColorsPrimary(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
-                    )
+                    ) {
+                        Text("开始连接")
+                    }
                 }
                 ConnectionState.CONNECTING -> {
                     Button(
-                        text = "取消连接",
-                        onClick = viewModel::disconnect,
+                        onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            viewModel.disconnect()
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
-                    )
+                    ) {
+                        Text("取消连接")
+                    }
                 }
                 else -> {
                     Button(
-                        text = "断开连接",
-                        onClick = viewModel::disconnect,
+                        onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            viewModel.disconnect()
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
-                    )
+                    ) {
+                        Text("断开连接")
+                    }
                 }
             }
 

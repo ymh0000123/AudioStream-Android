@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
 import com.xiaofeishu.audiostream.domain.repository.SettingsRepository
 import com.xiaofeishu.audiostream.di.AppScope
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +31,8 @@ private val KEY_PROTOCOL = stringPreferencesKey("protocol")
 private val KEY_TARGET_BITRATE = intPreferencesKey("target_bitrate")
 private val KEY_LATENCY_MODE = intPreferencesKey("latency_mode")
 private val KEY_HIDE_SINK_LATENCY_HINT = booleanPreferencesKey("hide_sink_latency_hint")
-
+private val KEY_HAPTIC_FEEDBACK_ENABLED = booleanPreferencesKey("haptic_feedback_enabled")
+private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
 /**
  * 持久化设置仓库实现。
  *
@@ -63,9 +65,17 @@ class SettingsRepositoryImpl @Inject constructor(
         .map { prefs -> prefs[KEY_LATENCY_MODE] ?: DEFAULT_LATENCY_MODE }
         .stateIn(appScope, SharingStarted.Eagerly, DEFAULT_LATENCY_MODE)
 
+    override val hapticFeedbackEnabled: StateFlow<Boolean> = dataStore.data
+        .map { prefs -> prefs[KEY_HAPTIC_FEEDBACK_ENABLED] ?: true }
+        .stateIn(appScope, SharingStarted.Eagerly, true)
+
     override val hideSinkLatencyHint: StateFlow<Boolean> = dataStore.data
         .map { prefs -> prefs[KEY_HIDE_SINK_LATENCY_HINT] ?: false }
         .stateIn(appScope, SharingStarted.Eagerly, false)
+
+    override val themeMode: StateFlow<ThemeMode> = dataStore.data
+        .map { prefs -> ThemeMode.fromWire(prefs[KEY_THEME_MODE]) }
+        .stateIn(appScope, SharingStarted.Eagerly, ThemeMode.SYSTEM)
 
     override val preferredProtocol: Flow<Protocol> = dataStore.data
         .map { prefs -> Protocol.fromWire(prefs[KEY_PROTOCOL]) }
@@ -103,11 +113,20 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[KEY_LATENCY_MODE] = mode
         }
     }
+    override suspend fun saveHapticFeedbackEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[KEY_HAPTIC_FEEDBACK_ENABLED] = enabled
+        }
+    }
 
     override suspend fun saveHideSinkLatencyHint(hidden: Boolean) {
         dataStore.edit { prefs ->
             prefs[KEY_HIDE_SINK_LATENCY_HINT] = hidden
         }
+    }
+
+    override suspend fun saveThemeMode(mode: ThemeMode) {
+        dataStore.edit { prefs -> prefs[KEY_THEME_MODE] = mode.wireValue }
     }
 
     override suspend fun savePreferredProtocol(protocol: Protocol) {

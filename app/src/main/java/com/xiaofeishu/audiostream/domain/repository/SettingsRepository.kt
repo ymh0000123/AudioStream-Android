@@ -3,6 +3,7 @@ package com.xiaofeishu.audiostream.domain.repository
 import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -23,9 +24,14 @@ interface SettingsRepository {
     /** 播放延迟模式：0=禁用跳帧，100=低延迟，150=平衡，200=稳定。 */
     val latencyMode: StateFlow<Int>
 
+    /** 是否启用主要交互的触感反馈。默认开启。 */
+    val hapticFeedbackEnabled: StateFlow<Boolean>
+
+
+    /** 应用配色方案。 */
+    val themeMode: StateFlow<ThemeMode>
     /** 是否忽略播放页的蓝牙链路延迟警告提示。 */
     val hideSinkLatencyHint: StateFlow<Boolean>
-
     /** 默认协议偏好。 */
     val preferredProtocol: Flow<Protocol>
 
@@ -40,7 +46,9 @@ interface SettingsRepository {
     suspend fun loadTargetBitrate(): Int
     suspend fun saveTargetBitrate(bitrate: Int)
     suspend fun saveLatencyMode(mode: Int)
+    suspend fun saveHapticFeedbackEnabled(enabled: Boolean)
     suspend fun saveHideSinkLatencyHint(hidden: Boolean)
+    suspend fun saveThemeMode(mode: ThemeMode)
     suspend fun savePreferredProtocol(protocol: Protocol)
     suspend fun addConnection(record: ConnectionRecord)
     suspend fun clearHistory()

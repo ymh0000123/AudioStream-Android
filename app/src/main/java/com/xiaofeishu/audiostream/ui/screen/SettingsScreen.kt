@@ -3,8 +3,12 @@ package com.xiaofeishu.audiostream.ui.screen
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,10 +29,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -36,25 +43,26 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.xiaofeishu.audiostream.BuildConfig
 import com.xiaofeishu.audiostream.R
 import com.xiaofeishu.audiostream.data.update.UpdateInfo
-import com.xiaofeishu.audiostream.ui.component.AppTopBar
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
+import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
 import com.xiaofeishu.audiostream.ui.component.SteppedSlider
+import com.xiaofeishu.audiostream.ui.component.contextClick
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
 import com.xiaofeishu.audiostream.viewmodel.UpdateUiState
 import com.xiaofeishu.audiostream.viewmodel.UpdateViewModel
 import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.extra.SuperArrow
-import top.yukonga.miuix.kmp.extra.SuperSwitch
-import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.MiuixPopupUtil.Companion.dismissDialog
 
 /** 播放延迟固定档位（ms 阈值）：0=关闭跳帧。 */
 private val LATENCY_MODES = listOf(0, 100, 150, 200)
-
 @Composable
 fun SettingsScreen(
     viewModel: HomeViewModel = hiltViewModel(),
@@ -64,7 +72,11 @@ fun SettingsScreen(
     val savedServers by viewModel.savedServers.collectAsState()
     val showClearConfirm = remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val globalHapticEnabled = LocalHapticFeedbackEnabled.current
     val latencyMode by viewModel.latencyMode.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
+    val showThemePicker = remember { mutableStateOf(false) }
     val updateState by updateViewModel.uiState.collectAsState()
     var downloadOptions by remember { mutableStateOf<UpdateInfo?>(null) }
 
@@ -83,33 +95,50 @@ fun SettingsScreen(
     }
 
     val hideSinkLatencyHint by viewModel.hideSinkLatencyHint.collectAsState()
+    val hapticFeedbackEnabled by viewModel.hapticFeedbackEnabled.collectAsState()
 
-    Scaffold(
-        topBar = {
-            AppTopBar(
-                title = "设置"
-            )
-        }
-    ) { padding ->
+    Scaffold { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(top = padding.calculateTopPadding())
         ) {
+            SmallTitle(text = "外观")
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                ArrowPreference(
+                    title = "配色方案",
+                    summary = themeMode.displayName,
+                    onClick = {
+                        haptic.contextClick(globalHapticEnabled)
+                        showThemePicker.value = true
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             SmallTitle(text = "后台保活")
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
             ) {
-                SuperArrow(
+                ArrowPreference(
                     title = context.getString(R.string.battery_optimization),
                     summary = context.getString(R.string.battery_optimization_desc),
-                    rightText = if (batteryIgnored) {
-                        context.getString(R.string.battery_optimization_granted)
-                    } else {
-                        context.getString(R.string.battery_optimization_request)
+                    endActions = {
+                        Text(
+                            text = if (batteryIgnored) {
+                                context.getString(R.string.battery_optimization_granted)
+                            } else {
+                                context.getString(R.string.battery_optimization_request)
+                            }
+                        )
                     },
                     onClick = if (batteryIgnored) {
                         null
@@ -132,7 +161,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
-                insideMargin = DpSize(16.dp, 16.dp)
+                insideMargin = PaddingValues(16.dp, 16.dp)
             ) {
                 Text(
                     text = context.getString(R.string.latency_mode),
@@ -141,7 +170,10 @@ fun SettingsScreen(
                 SteppedSlider(
                     values = LATENCY_MODES,
                     currentValue = latencyMode,
-                    onValueCommitted = viewModel::saveLatencyMode,
+                    onValueCommitted = { mode ->
+                        haptic.contextClick(globalHapticEnabled)
+                        viewModel.saveLatencyMode(mode)
+                    },
                     valueLabel = { mode ->
                         when (mode) {
                             100 -> context.getString(R.string.latency_mode_low)
@@ -163,18 +195,30 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
             ) {
+                SwitchPreference(
+                    checked = hapticFeedbackEnabled,
+                    onCheckedChange = { enabled ->
+                        viewModel.setHapticFeedbackEnabled(enabled)
+                        haptic.contextClick(globalHapticEnabled || enabled)
+                    },
+                    title = "触感反馈",
+                    summary = if (hapticFeedbackEnabled) "主要操作时提供轻微震动" else "已关闭操作震动"
+                )
                 // 蓝牙链路延迟警告提示：忽略后可在此恢复
-                SuperSwitch(
+                SwitchPreference(
+                    checked = !hideSinkLatencyHint,
+                    onCheckedChange = { show ->
+                        haptic.contextClick(globalHapticEnabled)
+                        viewModel.setHideSinkLatencyHint(!show)
+                    },
                     title = "链路延迟警告提示",
                     summary = if (hideSinkLatencyHint) {
                         "已忽略：蓝牙输出时不再显示链路延迟警告"
                     } else {
                         "蓝牙输出时在播放页显示链路延迟警告"
-                    },
-                    checked = !hideSinkLatencyHint,
-                    onCheckedChange = { show -> viewModel.setHideSinkLatencyHint(!show) }
+                    }
                 )
-                SuperArrow(
+                ArrowPreference(
                     title = "收藏的服务器",
                     summary = "${savedServers.size} 个",
                     onClick = null
@@ -189,25 +233,31 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
             ) {
-                SuperArrow(
+                ArrowPreference(
                     title = context.getString(R.string.check_for_updates),
                     summary = if (updateState == UpdateUiState.Checking) {
                         context.getString(R.string.update_checking)
                     } else {
                         context.getString(R.string.current_version, BuildConfig.VERSION_NAME)
                     },
-                    rightText = if (updateState == UpdateUiState.Checking) {
-                        null
-                    } else {
-                        context.getString(R.string.check_now)
+                    endActions = {
+                        if (updateState != UpdateUiState.Checking) {
+                            Text(text = context.getString(R.string.check_now))
+                        }
                     },
                     enabled = updateState != UpdateUiState.Checking,
-                    onClick = updateViewModel::checkForUpdates
+                    onClick = {
+                        haptic.contextClick(globalHapticEnabled)
+                        updateViewModel.checkForUpdates()
+                    }
                 )
-                SuperArrow(
+                ArrowPreference(
                     title = "关于",
                     summary = "应用版本与开源信息",
-                    onClick = onNavigateToAbout
+                    onClick = {
+                        haptic.contextClick(globalHapticEnabled)
+                        onNavigateToAbout()
+                    }
                 )
             }
 
@@ -215,33 +265,46 @@ fun SettingsScreen(
 
             // 清除历史（真正调用 clearHistory，修复 saveVolume(80) bug）
             Button(
-                text = "清除连接历史",
-                onClick = { showClearConfirm.value = true },
+                onClick = {
+                    haptic.contextClick(globalHapticEnabled)
+                    showClearConfirm.value = true
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
-            )
+            ) {
+                Text("清除连接历史")
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
-    SuperDialog(
+    OverlayDialog(
+        show = showClearConfirm.value,
         title = "清除连接历史",
         summary = "将删除全部连接历史记录，收藏的服务器不受影响。是否继续？",
-        show = showClearConfirm,
-        onDismissRequest = { dismissDialog(showClearConfirm) }
+        onDismissRequest = { showClearConfirm.value = false }
     ) {
         DialogButtonRow(
             cancelText = "取消",
             confirmText = "清除",
-            onCancel = { dismissDialog(showClearConfirm) },
+            onCancel = { showClearConfirm.value = false },
             onConfirm = {
                 viewModel.clearHistory()
-                dismissDialog(showClearConfirm)
+                showClearConfirm.value = false
             }
         )
     }
+    ThemePickerDialog(
+        show = showThemePicker.value,
+        selected = themeMode,
+        onDismiss = { showThemePicker.value = false },
+        onSelected = { mode ->
+            viewModel.saveThemeMode(mode)
+            showThemePicker.value = false
+        }
+    )
 
     UpdateDialogs(
         context = context,
@@ -252,17 +315,68 @@ fun SettingsScreen(
     )
 }
 
+@Composable
+private fun ThemePickerDialog(
+    show: Boolean,
+    selected: ThemeMode,
+    onDismiss: () -> Unit,
+    onSelected: (ThemeMode) -> Unit,
+) {
+    OverlayDialog(
+        show = show,
+        title = "配色方案",
+        summary = "选择应用的强调色。系统取色在 Android 11 及以下回退为靛蓝紫。",
+        onDismissRequest = onDismiss,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ThemeMode.entries.forEach { mode ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable { onSelected(mode) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(themeSwatch(mode), CircleShape)
+                    )
+                    Text(
+                        text = mode.displayName,
+                        modifier = Modifier.weight(1f),
+                        fontSize = MiuixTheme.textStyles.body2.fontSize,
+                    )
+                    if (mode == selected) {
+                        Text(
+                            text = "已选",
+                            color = MiuixTheme.colorScheme.primary,
+                            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun themeSwatch(mode: ThemeMode): Color = when (mode) {
+    ThemeMode.SYSTEM -> Color(0xFF607D8B)
+    ThemeMode.INDIGO -> Color(0xFF667EEA)
+    ThemeMode.OCEAN -> Color(0xFF1565C0)
+    ThemeMode.TEAL -> Color(0xFF008577)
+    ThemeMode.ORANGE -> Color(0xFFE65100)
+    ThemeMode.PINK -> Color(0xFFC2185B)
+}
+
 /**
  * 更新相关弹窗。
  *
- * 关键约束：Miuix 的对话框由 [top.yukonga.miuix.kmp.utils.MiuixPopupUtil] 的
- * **进程级单例** 承载（isDialogShowing / dialogContext），且 showDialog 在已显示时会直接早退。
- * 因此这里必须满足两点，否则会出现"弹窗关不掉"和"叠两层弹窗"：
- *
- * 1. 全程只使用**一个** SuperDialog 与**一个** show 状态，内容按 [UpdateUiState] 分支渲染，
- *    绝不能为每种状态各建一个 SuperDialog（那样多个 show 会在同一帧争抢单例）。
- * 2. 任何关闭路径都必须走 [dismissDialog] 把 show 置为 false，
- *    只调 ViewModel 的 dismissResult() 不会复位单例，弹窗会永久卡住。
+ * 关键约束：Miuix 0.9.1 的 OverlayDialog 基于独立的 show 布尔状态驱动，
+ * 这里全程只使用一个 OverlayDialog 与一个 show 状态，内容按 [UpdateUiState] 分支渲染，
+ * 避免同一帧出现多个弹窗互相干扰。
  */
 @Composable
 private fun UpdateDialogs(
@@ -283,9 +397,9 @@ private fun UpdateDialogs(
         show.value = hasContent
     }
 
-    // 统一关闭入口：先复位 Miuix 单例，再清业务状态
+    // 统一关闭入口：复位 show 状态 + 清业务状态
     val dismissAll: () -> Unit = {
-        dismissDialog(show)
+        show.value = false
         onDownloadOptionsChange(null)
         updateViewModel.dismissResult()
     }
@@ -302,9 +416,9 @@ private fun UpdateDialogs(
         else -> context.getString(R.string.update_check_failed_title)
     }
 
-    SuperDialog(
+    OverlayDialog(
+        show = show.value,
         title = title,
-        show = show,
         onDismissRequest = dismissAll
     ) {
         when {
@@ -344,11 +458,12 @@ private fun UpdateDialogs(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
-                    text = context.getString(R.string.close),
-                    submit = true,
                     onClick = dismissAll,
+                    colors = ButtonDefaults.buttonColorsPrimary(),
                     modifier = Modifier.fillMaxWidth()
-                )
+                ) {
+                    Text(context.getString(R.string.close))
+                }
             }
 
             updateState is UpdateUiState.Error -> Column {
@@ -363,7 +478,7 @@ private fun UpdateDialogs(
                     confirmText = context.getString(R.string.retry),
                     onCancel = dismissAll,
                     onConfirm = {
-                        dismissDialog(show)
+                        show.value = false
                         updateViewModel.checkForUpdates()
                     }
                 )
@@ -388,22 +503,25 @@ private fun DownloadMethodContent(
         Spacer(modifier = Modifier.height(4.dp))
         info.mirrorDownloadUrl?.let { mirrorUrl ->
             Button(
-                text = context.getString(R.string.download_via_mirror),
-                submit = true,
                 onClick = { onPicked(mirrorUrl) },
+                colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier.fillMaxWidth()
-            )
+            ) {
+                Text(context.getString(R.string.download_via_mirror))
+            }
         }
         Button(
-            text = context.getString(R.string.download_via_github),
             onClick = { onPicked(info.downloadUrl) },
             modifier = Modifier.fillMaxWidth()
-        )
+        ) {
+            Text(context.getString(R.string.download_via_github))
+        }
         Button(
-            text = context.getString(R.string.cancel),
             onClick = onCancel,
             modifier = Modifier.fillMaxWidth()
-        )
+        ) {
+            Text(context.getString(R.string.cancel))
+        }
     }
 }
 
@@ -445,7 +563,7 @@ private fun AvailableContent(
     }
 }
 
-/** SuperDialog 没有内置按钮区，统一封装左取消右确认的按钮行。 */
+/** OverlayDialog 没有内置按钮区，统一封装左取消右确认的按钮行。 */
 @Composable
 private fun DialogButtonRow(
     cancelText: String,
@@ -458,16 +576,18 @@ private fun DialogButtonRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Button(
-            text = cancelText,
             onClick = onCancel,
             modifier = Modifier.weight(1f)
-        )
+        ) {
+            Text(cancelText)
+        }
         Button(
-            text = confirmText,
-            submit = true,
             onClick = onConfirm,
+            colors = ButtonDefaults.buttonColorsPrimary(),
             modifier = Modifier.weight(1f)
-        )
+        ) {
+            Text(confirmText)
+        }
     }
 }
 

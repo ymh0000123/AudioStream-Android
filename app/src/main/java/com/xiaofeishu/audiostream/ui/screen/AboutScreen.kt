@@ -1,7 +1,7 @@
 package com.xiaofeishu.audiostream.ui.screen
 
-import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -13,92 +13,162 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.BuildConfig
-import com.xiaofeishu.audiostream.ui.component.AppTopBar
+import com.xiaofeishu.audiostream.ui.component.LocalEnableBlur
+import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.contextClick
+import com.xiaofeishu.audiostream.ui.component.rememberBlurBackdrop
+import com.xiaofeishu.audiostream.ui.effect.BgEffectBackground
+import com.xiaofeishu.audiostream.viewmodel.UpdateUiState
+import com.xiaofeishu.audiostream.viewmodel.UpdateViewModel
+import kotlinx.coroutines.flow.onEach
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.LazyColumn
+import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.extra.SuperArrow
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
+import top.yukonga.miuix.kmp.blur.isRenderEffectSupported
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
+import top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles
+import java.util.Locale
 
 private const val REPO_URL = "https://github.com/ymh0000123/AudioStream-Android"
 private const val RELEASES_URL = "$REPO_URL/releases"
-private const val LICENSE_URL = "https://www.apache.org/licenses/LICENSE-2.0.txt"
-
-/** Hero 区（大标题 + 版本号）的占位高度。顶栏压成单行后同步收紧，避免顶部大片留白。 */
-private val HeroHeight = 160.dp
+private const val LICENSE_URL = "https://opensource.org/licenses/MIT"
 
 /**
- * 关于页。布局与滚动动画参考 Miuzarte/ScrcpyForAndroid 的 AboutScreen：
+ * AudioStream 关于页：
  *
- * - 顶部 Hero 区展示大号项目名与版本号，随列表滚动分两阶段淡出并轻微缩小：
- *   先淡出版本号（第一阶段过半才开始），再淡出项目名，形成层次感。
- * - 顶栏初始完全透明，Hero 区滚完后才渐显标题与背景色。
+ * - 顶部 Hero 区(大号项目名 + 版本号 + 仓库地址)悬浮在流光背景上，
+ *   随列表滚动分两阶段淡出/缩小(先版本号后项目名)。
+ * - 顶栏初始透明，Hero 区滚完后渐显标题与背景色。
+ * - 卡片为毛玻璃材质(textureBlur)，低版本或设备不支持时回退纯色。
+ * - 列表项使用 HyperOS 风格 ArrowPreference。
+ * - 双击 Hero 区可切换 OS2/OS3 两套流光 shader 效果。
+ * - "版本发布"行展示最新版本检查结果(复用本项目的 UpdateViewModel)。
  *
- * 注意：原项目基于 Miuix 0.9.x，其毛玻璃（textureBlur / layerBackdrop）与流光背景
- * 依赖 miuix-blur 模块，本项目使用的 0.2.9 无该 API，故只复刻布局与滚动动画。
+ * 依赖 miuix 0.9.1 的 blur 与 preference 模块。
  */
 @Composable
-fun AboutScreen() {
+fun AboutScreen(
+    onBack: () -> Unit = {},
+    updateViewModel: UpdateViewModel = hiltViewModel(),
+) {
+    val haptic = LocalHapticFeedback.current
+    val enableBlur = LocalEnableBlur.current
+    val hapticEnabled = LocalHapticFeedbackEnabled.current
+    val blurBackdrop = rememberBlurBackdrop(enableBlur)
+    val topAppBarScrollBehavior = MiuixScrollBehavior()
     val lazyListState = rememberLazyListState()
-    var heroHeightPx by remember { mutableIntStateOf(0) }
+    var logoHeightPx by remember { mutableIntStateOf(0) }
 
-    // Hero 区滚出屏幕的进度 0f..1f，驱动顶栏渐显
+    // 进入页面即触发一次更新检查。
+    LaunchedEffect(Unit) {
+        updateViewModel.checkForUpdates()
+    }
+
     val scrollProgress by remember {
         derivedStateOf {
-            if (heroHeightPx <= 0) {
+            if (logoHeightPx <= 0) {
                 0f
-            } else if (lazyListState.firstVisibleItemIndex > 0) {
-                1f
             } else {
-                (lazyListState.firstVisibleItemScrollOffset.toFloat() / heroHeightPx)
-                    .coerceIn(0f, 1f)
+                val index = lazyListState.firstVisibleItemIndex
+                val offset = lazyListState.firstVisibleItemScrollOffset
+                if (index > 0) 1f else (offset.toFloat() / logoHeightPx).coerceIn(0f, 1f)
             }
         }
     }
 
     Scaffold(
         topBar = {
-            AppTopBar(
-                title = "关于",
-                // 顶栏背景与标题随滚动渐显：Hero 区可见时完全透明，避免与大标题重叠
-                color = MiuixTheme.colorScheme.background.copy(alpha = scrollProgress),
-                modifier = Modifier.graphicsLayer { alpha = scrollProgress }
+            SmallTopAppBar(
+                title = "",
+                scrollBehavior = topAppBarScrollBehavior,
+                modifier =
+                    if (blurBackdrop != null) Modifier.layerBackdrop(blurBackdrop)
+                    else Modifier,
+                color =
+                    if (blurBackdrop != null) Color.Transparent
+                    else colorScheme.surface.copy(alpha = if (scrollProgress == 1f) 1f else 0f),
+                titleColor = Color.Transparent,
+                defaultWindowInsetsPadding = false,
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            haptic.contextClick(hapticEnabled)
+                            onBack()
+                        },
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "返回",
+                        )
+                    }
+                },
             )
-        }
+        },
     ) { innerPadding ->
         AboutContent(
-            padding = innerPadding,
+            padding = PaddingValues(
+                top = innerPadding.calculateTopPadding(),
+                bottom = innerPadding.calculateBottomPadding(),
+            ),
+            enableBlur = enableBlur,
             lazyListState = lazyListState,
-            onHeroHeightChanged = { heroHeightPx = it }
+            scrollProgress = scrollProgress,
+            onLogoHeightChanged = { logoHeightPx = it },
+            updateViewModel = updateViewModel,
         )
     }
 }
@@ -106,116 +176,203 @@ fun AboutScreen() {
 @Composable
 private fun AboutContent(
     padding: PaddingValues,
+    enableBlur: Boolean,
     lazyListState: LazyListState,
-    onHeroHeightChanged: (Int) -> Unit
+    scrollProgress: Float,
+    onLogoHeightChanged: (Int) -> Unit,
+    updateViewModel: UpdateViewModel,
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val hapticEnabled = LocalHapticFeedbackEnabled.current
+    val updateState by updateViewModel.uiState.collectAsState()
+    val backdrop = rememberLayerBackdrop()
+    var isOs3Effect by remember { mutableStateOf(true) }
+    val blurEnabled = remember(enableBlur) { enableBlur && isRenderEffectSupported() }
+    val isDark = colorScheme.background.luminance() < 0.5f
+    val heroBlendColors = remember(isDark) { heroBlendColors(isDark) }
+    val cardBlendColors = remember(isDark) { aboutCardBlendToken(isDark) }
 
-    // 各元素在窗口中的纵向位置，用于把滚动偏移换算成分阶段的淡出进度
-    var heroBottomY by remember { mutableFloatStateOf(0f) }
-    var titleBottomY by remember { mutableFloatStateOf(0f) }
-    var versionBottomY by remember { mutableFloatStateOf(0f) }
-    var initialHeroBottomY by remember { mutableFloatStateOf(0f) }
-    var titleProgress by remember { mutableFloatStateOf(0f) }
-    var versionProgress by remember { mutableFloatStateOf(0f) }
+    var logoAreaY by remember { mutableFloatStateOf(0f) }
+    var projectNameY by remember { mutableFloatStateOf(0f) }
+    var versionCodeY by remember { mutableFloatStateOf(0f) }
+    var projectNameProgress by remember { mutableFloatStateOf(0f) }
+    var versionCodeProgress by remember { mutableFloatStateOf(0f) }
+    var initialLogoAreaY by remember { mutableFloatStateOf(0f) }
+
+    // 版本发布行右侧文本:检查中 "..."、有结果展示最新版本、失败展示错误
+    val currentUpdateState = updateState
+    val releaseStatusText = when (currentUpdateState) {
+        UpdateUiState.Idle -> null
+        UpdateUiState.Checking -> "..."
+        is UpdateUiState.Available -> currentUpdateState.info.versionName
+        is UpdateUiState.UpToDate -> currentUpdateState.latestVersion
+        is UpdateUiState.Error -> "错误"
+    }
 
     LaunchedEffect(lazyListState) {
         snapshotFlow { lazyListState.firstVisibleItemScrollOffset }
-            .collect { offset ->
+            .onEach { offset ->
                 if (lazyListState.firstVisibleItemIndex > 0) {
-                    titleProgress = 1f
-                    versionProgress = 1f
-                    return@collect
+                    projectNameProgress = 1f
+                    versionCodeProgress = 1f
+                    return@onEach
                 }
-                if (initialHeroBottomY == 0f && heroBottomY > 0f) {
-                    initialHeroBottomY = heroBottomY
+                if (initialLogoAreaY == 0f && logoAreaY > 0f) {
+                    initialLogoAreaY = logoAreaY
                 }
-                val refHeroBottom = if (initialHeroBottomY > 0f) initialHeroBottomY else heroBottomY
-                // 第一阶段：版本号淡出（滚过一半才开始，制造先后次序）
-                val stage1 = refHeroBottom - versionBottomY
-                // 第二阶段：项目名淡出
-                val stage2 = versionBottomY - titleBottomY
-                val versionDelay = stage1 * 0.5f
-                versionProgress =
-                    ((offset - versionDelay) / (stage1 - versionDelay).coerceAtLeast(1f))
+                val refLogoAreaY = if (initialLogoAreaY > 0f) initialLogoAreaY else logoAreaY
+                val stage1TotalLength = refLogoAreaY - versionCodeY
+                val stage2TotalLength = versionCodeY - projectNameY
+                val versionCodeDelay = stage1TotalLength * 0.5f
+                versionCodeProgress =
+                    ((offset.toFloat() - versionCodeDelay) / (stage1TotalLength - versionCodeDelay)
+                        .coerceAtLeast(1f))
                         .coerceIn(0f, 1f)
-                titleProgress =
-                    ((offset - stage1) / stage2.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                projectNameProgress =
+                    ((offset.toFloat() - stage1TotalLength) / stage2TotalLength
+                        .coerceAtLeast(1f))
+                        .coerceIn(0f, 1f)
             }
+            .collect {}
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Hero 区：不参与滚动，由上方 LazyColumn 的占位 item 让出空间，
-        // 自身只按滚动进度做淡出/缩放，实现"被列表推走"的视差感。
+    @Composable
+    fun AboutCard(
+        modifier: Modifier = Modifier.padding(horizontal = 12.dp),
+        content: @Composable () -> Unit,
+    ) {
+        Card(
+            modifier = modifier.textureBlur(
+                backdrop = backdrop,
+                shape = RoundedCornerShape(16.dp),
+                blurRadius = 60f,
+                noiseCoefficient = BlurDefaults.NoiseCoefficient,
+                colors = BlurColors(blendColors = cardBlendColors),
+                enabled = blurEnabled,
+            ),
+            colors = CardDefaults.defaultColors(
+                color =
+                    if (blurEnabled) Color.Transparent
+                    else colorScheme.surfaceContainer,
+                contentColor = Color.Transparent,
+            ),
+        ) {
+            content()
+        }
+    }
+
+    BgEffectBackground(
+        dynamicBackground = true,
+        modifier = Modifier.fillMaxSize(),
+        bgModifier =
+            if (blurEnabled) Modifier.layerBackdrop(backdrop)
+            else Modifier,
+        effectBackground = true,
+        isOs3Effect = isOs3Effect,
+        alpha = { 1f - scrollProgress },
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    top = padding.calculateTopPadding() + 32.dp,
+                    top = padding.calculateTopPadding() + 92.dp,
                     start = 24.dp,
-                    end = 24.dp
+                    end = 24.dp,
                 ),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.Center,
             ) {
                 val density = LocalDensity.current
                 val textMeasurer = rememberTextMeasurer()
+                val baseTitleFontSize = 32.sp
                 val appName = "小废鼠 AudioStream"
-                val baseFontSize = 32.sp
-                // 按可用宽度自适应字号，长标题不换行、不裁切
-                val measured = remember(textMeasurer) {
+                val titleLayout = remember(textMeasurer) {
                     textMeasurer.measure(
                         text = appName,
                         style = TextStyle(
                             fontWeight = FontWeight.Black,
-                            fontSize = baseFontSize
+                            fontSize = baseTitleFontSize,
                         ),
-                        softWrap = false
+                        softWrap = false,
                     )
                 }
                 val titleFontSize = with(density) {
                     val availableWidthPx = maxWidth.roundToPx().toFloat()
-                    val measuredWidthPx = measured.size.width.toFloat().coerceAtLeast(1f)
+                    val measuredWidthPx = titleLayout.size.width.toFloat().coerceAtLeast(1f)
                     val scale = (availableWidthPx / measuredWidthPx).coerceAtMost(1f)
-                    (baseFontSize.value * scale).coerceAtLeast(20f).sp
+                    (baseTitleFontSize.value * scale).coerceAtLeast(24f).sp
                 }
                 Text(
                     text = appName,
                     modifier = Modifier
                         .padding(top = 12.dp, bottom = 6.dp)
                         .onGloballyPositioned { coordinates ->
-                            if (titleBottomY != 0f) return@onGloballyPositioned
-                            titleBottomY = coordinates.positionInWindow().y + coordinates.size.height
+                            if (projectNameY != 0f) return@onGloballyPositioned
+                            val y = coordinates.positionInWindow().y
+                            val size = coordinates.size
+                            projectNameY = y + size.height
                         }
                         .graphicsLayer {
-                            alpha = 1f - titleProgress
-                            scaleX = 1f - titleProgress * 0.05f
-                            scaleY = 1f - titleProgress * 0.05f
-                        },
-                    color = MiuixTheme.colorScheme.onBackground,
+                            alpha = 1f - projectNameProgress
+                            scaleX = 1f - (projectNameProgress * 0.05f)
+                            scaleY = 1f - (projectNameProgress * 0.05f)
+                        }
+                        .textureBlur(
+                            backdrop = backdrop,
+                            shape = RoundedCornerShape(16.dp),
+                            blurRadius = 150f,
+                            noiseCoefficient = BlurDefaults.NoiseCoefficient,
+                            colors = BlurColors(blendColors = heroBlendColors),
+                            contentBlendMode = BlendMode.DstIn,
+                            enabled = blurEnabled,
+                        ),
+                    color = colorScheme.onBackground,
                     fontWeight = FontWeight.Bold,
-                    fontSize = titleFontSize
+                    fontSize = titleFontSize,
                 )
             }
             Text(
-                text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})" +
+                        " · ${BuildConfig.BUILD_TYPE.uppercase(Locale.getDefault())} BUILD",
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onGloballyPositioned { coordinates ->
-                        if (versionBottomY != 0f) return@onGloballyPositioned
-                        versionBottomY = coordinates.positionInWindow().y + coordinates.size.height
-                    }
                     .graphicsLayer {
-                        alpha = 1f - versionProgress
-                        scaleX = 1f - versionProgress * 0.05f
-                        scaleY = 1f - versionProgress * 0.05f
+                        alpha = 1f - versionCodeProgress
+                        scaleX = 1f - (versionCodeProgress * 0.05f)
+                        scaleY = 1f - (versionCodeProgress * 0.05f)
+                    }
+                    .onGloballyPositioned { coordinates ->
+                        if (versionCodeY != 0f) return@onGloballyPositioned
+                        val y = coordinates.positionInWindow().y
+                        val size = coordinates.size
+                        versionCodeY = y + size.height
                     },
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                color = colorScheme.onSurfaceVariantSummary,
                 fontSize = 14.sp,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = REPO_URL.removePrefix("https://"),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        alpha = 1f - versionCodeProgress
+                        scaleX = 1f - (versionCodeProgress * 0.05f)
+                        scaleY = 1f - (versionCodeProgress * 0.05f)
+                    }
+                    .onGloballyPositioned { coordinates ->
+                        if (versionCodeY != 0f) return@onGloballyPositioned
+                        val y = coordinates.positionInWindow().y
+                        val size = coordinates.size
+                        versionCodeY = y + size.height
+                    },
+                color = colorScheme.onSurfaceVariantSummary,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
             )
         }
 
@@ -224,104 +381,140 @@ private fun AboutContent(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 top = padding.calculateTopPadding(),
-                // 关于页不显示底部导航栏（外层 bottomBar 隐藏、padding.bottom 为 0），
-                // 系统手势条 inset 由这里自己吃，避免最后一张卡片被遮挡
+                // 关于页不显示底部导航栏(外层 bottomBar 隐藏、padding.bottom 为 0)，
+                // 系统手势条 inset 由这里自己吃，避免最后一张卡片被遮挡。
                 bottom = padding.calculateBottomPadding() +
-                    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
-            )
-            // Miuix 0.2.9 的 LazyColumn 没有 verticalArrangement 参数，
-            // 卡片间距由各 item 自带的 bottom padding 提供（见 AboutCard）。
+                    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp,
+            ),
         ) {
-            // 透明占位：为悬浮的 Hero 区让出空间，同时作为滚动进度的量尺
-            item(key = "heroSpacer") {
+            item(key = "logoSpacer") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(HeroHeight)
-                        .onSizeChanged { onHeroHeightChanged(it.height) }
-                        .onGloballyPositioned { coordinates ->
-                            heroBottomY = coordinates.positionInWindow().y + coordinates.size.height
+                        .height(320.dp)
+                        .padding(top = 36.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    isOs3Effect = !isOs3Effect
+                                },
+                            )
                         }
-                )
+                        .onSizeChanged { onLogoHeightChanged(it.height) }
+                        .onGloballyPositioned { coordinates ->
+                            val y = coordinates.positionInWindow().y
+                            val size = coordinates.size
+                            logoAreaY = y + size.height
+                        },
+                    contentAlignment = Alignment.TopCenter,
+                ) {}
             }
-
-            item(key = "project") {
-                AboutCard {
-                    SuperArrow(
-                        title = "项目仓库",
-                        rightText = "GitHub",
-                        onClick = { openUrl(context, REPO_URL) }
-                    )
-                    SuperArrow(
-                        title = "版本发布",
-                        rightText = "Releases",
-                        onClick = { openUrl(context, RELEASES_URL) }
-                    )
-                }
-            }
-
-            item(key = "license") {
-                AboutCard {
-                    SuperArrow(
-                        title = "开源许可",
-                        rightText = "Apache-2.0",
-                        onClick = { openUrl(context, LICENSE_URL) }
-                    )
-                }
-            }
-
-            item(key = "credits") {
-                AboutCard {
-                    listOf(
-                        "Miuix" to "https://github.com/miuix-kotlin-multiplatform/miuix",
-                        "OkHttp" to "https://github.com/square/okhttp",
-                        "Hilt" to "https://github.com/google/dagger"
-                    ).forEach { (name, repo) ->
-                        SuperArrow(
-                            title = name,
-                            rightText = "GitHub",
-                            onClick = { openUrl(context, repo) }
+            item(key = "about") {
+                Column(
+                    modifier = Modifier
+                        .fillParentMaxHeight()
+                        .padding(bottom = padding.calculateBottomPadding()),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                ) {
+                    AboutCard {
+                        ArrowPreference(
+                            title = "项目仓库",
+                            endActions = {
+                                Text(
+                                    text = "GitHub",
+                                    fontSize = textStyles.body2.fontSize,
+                                    color = colorScheme.onSurfaceVariantActions,
+                                )
+                            },
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                openUrl(context, REPO_URL)
+                            },
                         )
+                        ArrowPreference(
+                            title = "版本发布",
+                            endActions = {
+                                releaseStatusText?.let {
+                                    Text(
+                                        text = it,
+                                        fontSize = textStyles.body2.fontSize,
+                                        color = colorScheme.onSurfaceVariantActions,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                openUrl(context, RELEASES_URL)
+                            },
+                        )
+                    }
+                    AboutCard {
+                        ArrowPreference(
+                            title = "开源许可",
+                            endActions = {
+                                Text(
+                                    text = "MIT",
+                                    fontSize = textStyles.body2.fontSize,
+                                    color = colorScheme.onSurfaceVariantActions,
+                                )
+                            },
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                openUrl(context, LICENSE_URL)
+                            },
+                        )
+                    }
+                    AboutCard {
+                        listOf(
+                            Pair("Miuix", "https://github.com/compose-miuix-ui/miuix"),
+                            Pair("OkHttp", "https://github.com/square/okhttp"),
+                            Pair("Hilt", "https://github.com/google/dagger"),
+                        ).forEach { (name, repo) ->
+                            ArrowPreference(
+                                title = name,
+                                endActions = {
+                                    Text(
+                                        text = "GitHub",
+                                        fontSize = textStyles.body2.fontSize,
+                                        color = colorScheme.onSurfaceVariantActions,
+                                    )
+                                },
+                                onClick = {
+                                    haptic.contextClick(hapticEnabled)
+                                    openUrl(context, repo)
+                                },
+                            )
+                        }
                     }
                 }
             }
-
-            item(key = "intro") {
-                AboutCard(insidePadding = true) {
-                    Text(
-                        text = "AudioStream 是一个 Android 原生音频流播放客户端，" +
-                            "通过 WebSocket 协议连接到音频流服务器，接收 PCM 音频数据并实时播放。" +
-                            "支持 mDNS 局域网自动发现、前台服务保活、自动重连、连接历史与收藏服务器。",
-                        fontSize = MiuixTheme.textStyles.body2.fontSize,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    )
-                }
-            }
         }
     }
 }
 
-@Composable
-private fun AboutCard(
-    insidePadding: Boolean = false,
-    content: @Composable () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp),
-        insideMargin = if (insidePadding) {
-            DpSize(16.dp, 16.dp)
-        } else {
-            DpSize(0.dp, 0.dp)
-        }
-    ) {
-        content()
-    }
-}
+private fun heroBlendColors(isDark: Boolean): List<BlendColorEntry> =
+    if (isDark) listOf(
+        BlendColorEntry(Color(0xE6A1A1A1), BlurBlendMode.ColorDodge),
+        BlendColorEntry(Color(0x4DE6E6E6), BlurBlendMode.LinearLight),
+        BlendColorEntry(Color(0xFF1AF500), BlurBlendMode.Lab),
+    )
+    else listOf(
+        BlendColorEntry(Color(0xCC4A4A4A), BlurBlendMode.ColorBurn),
+        BlendColorEntry(Color(0xFF4F4F4F), BlurBlendMode.LinearLight),
+        BlendColorEntry(Color(0xFF1AF200), BlurBlendMode.Lab),
+    )
 
-private fun openUrl(context: Context, url: String) {
+private fun aboutCardBlendToken(isDark: Boolean): List<BlendColorEntry> =
+    if (isDark) listOf(
+        BlendColorEntry(Color(0x4DA9A9A9), BlurBlendMode.Luminosity),
+        BlendColorEntry(Color(0x1A9C9C9C), BlurBlendMode.PlusDarker),
+    )
+    else listOf(
+        BlendColorEntry(Color(0x340034F9), BlurBlendMode.Overlay),
+        BlendColorEntry(Color(0xB3FFFFFF), BlurBlendMode.HardLight),
+    )
+
+private fun openUrl(context: android.content.Context, url: String) {
     runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
     }

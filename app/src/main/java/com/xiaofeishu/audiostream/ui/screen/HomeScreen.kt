@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.contextClick
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,20 +27,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
-import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.ui.component.ServerCard
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
 import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.LazyColumn
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import androidx.compose.foundation.lazy.LazyColumn
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.MiuixPopupUtil.Companion.dismissDialog
 
 @Composable
 fun HomeScreen(
@@ -47,6 +46,8 @@ fun HomeScreen(
 ) {
     val servers by viewModel.servers.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
+    val haptic = LocalHapticFeedback.current
+    val hapticEnabled = LocalHapticFeedbackEnabled.current
 
     // 自动搜索跟随页面可见性：进入/回前台开始，离开/退后台停止（释放组播锁省电）
     LifecycleResumeEffect(Unit) {
@@ -58,22 +59,7 @@ fun HomeScreen(
     var address by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("19730") }
 
-    Scaffold(
-        topBar = {
-            AppTopBar(
-                title = "AudioStream",
-                actions = {
-                    IconButton(onClick = { viewModel.startScan() }) {
-                        Icon(
-                            imageVector = Icons.Filled.Refresh,
-                            contentDescription = "重新扫描",
-                            tint = MiuixTheme.colorScheme.onBackground
-                        )
-                    }
-                }
-            )
-        }
-    ) { padding ->
+    Scaffold { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -95,8 +81,14 @@ fun HomeScreen(
                         val server = servers[index]
                         ServerCard(
                             server = server,
-                            onClick = { onConnect(server) },
-                            onToggleSaved = { viewModel.toggleSaved(server) }
+                            onClick = {
+                                haptic.contextClick(hapticEnabled)
+                                onConnect(server)
+                            },
+                            onToggleSaved = {
+                                haptic.contextClick(hapticEnabled)
+                                viewModel.toggleSaved(server)
+                            }
                         )
                     }
                 }
@@ -108,30 +100,38 @@ fun HomeScreen(
                     modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
                 )
                 Button(
-                    text = "重新扫描",
-                    onClick = { viewModel.startScan() },
+                    onClick = {
+                        haptic.contextClick(hapticEnabled)
+                        viewModel.startScan()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
-                )
+                ) {
+                    Text("重新扫描")
+                }
                 Spacer(modifier = Modifier.weight(1f))
             }
 
             Button(
-                text = "手动连接",
-                onClick = { showDialog.value = true },
-                submit = true,
+                onClick = {
+                    haptic.contextClick(hapticEnabled)
+                    showDialog.value = true
+                },
+                colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 12.dp)
-            )
+            ) {
+                Text("手动连接")
+            }
         }
     }
 
-    SuperDialog(
+    OverlayDialog(
+        show = showDialog.value,
         title = "连接服务器",
-        show = showDialog,
-        onDismissRequest = { dismissDialog(showDialog) }
+        onDismissRequest = { showDialog.value = false }
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             TextField(
@@ -154,20 +154,25 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    text = "取消",
-                    onClick = { dismissDialog(showDialog) },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    text = "连接",
-                    submit = true,
                     onClick = {
+                        haptic.contextClick(hapticEnabled)
+                        showDialog.value = false
+                    },
+                ) {
+                    Text("取消")
+                }
+                Button(
+                    onClick = {
+                        haptic.contextClick(hapticEnabled)
                         val portInt = port.toIntOrNull() ?: 19730
                         onConnect(ServerInfo(address, address, portInt, Protocol.WEBSOCKET))
-                        dismissDialog(showDialog)
+                        showDialog.value = false
                     },
+                    colors = ButtonDefaults.buttonColorsPrimary(),
                     modifier = Modifier.weight(1f)
-                )
+                ) {
+                    Text("连接")
+                }
             }
         }
     }

@@ -140,10 +140,10 @@ jobs:
             version_name="${version_name#V}"
             version_args+=("-PappVersionName=${version_name}")
           fi
-          ./gradlew clean assembleRelease \
+          ./gradlew assembleRelease \
             "${version_args[@]}" \
-            --no-daemon \
-            --no-configuration-cache \
+            --configuration-cache \
+            --build-cache \
             --stacktrace
 
       - name: Collect release APK

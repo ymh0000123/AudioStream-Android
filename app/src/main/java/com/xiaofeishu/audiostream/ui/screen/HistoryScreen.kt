@@ -10,6 +10,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.xiaofeishu.audiostream.ui.component.LocalHapticFeedbackEnabled
+import com.xiaofeishu.audiostream.ui.component.contextClick
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -17,16 +20,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
-import com.xiaofeishu.audiostream.ui.component.AppTopBar
 import com.xiaofeishu.audiostream.viewmodel.HomeViewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.LazyColumn
+import androidx.compose.foundation.lazy.LazyColumn
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
@@ -46,14 +48,15 @@ fun HistoryScreen(
     val history by viewModel.history.collectAsState()
     val savedServers by viewModel.savedServers.collectAsState()
     val dateFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    val haptic = LocalHapticFeedback.current
+    val hapticEnabled = LocalHapticFeedbackEnabled.current
 
-    Scaffold(
-        topBar = {
-            AppTopBar(
-                title = "历史与收藏"
-            )
-        }
-    ) { padding ->
+    fun withHaptic(action: () -> Unit): () -> Unit = {
+        haptic.contextClick(hapticEnabled)
+        action()
+    }
+
+    Scaffold { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -67,10 +70,10 @@ fun HistoryScreen(
                         title = server.name.ifBlank { server.display },
                         subtitle = "${server.display} · ${server.protocol.displayName}",
                         trailing = "已收藏",
-                        onClick = { onConnect(viewModel.savedToServer(server)) },
+                        onClick = withHaptic { onConnect(viewModel.savedToServer(server)) },
                         actionIcon = Icons.Filled.Delete,
                         actionContentDescription = "取消收藏",
-                        onAction = { viewModel.removeSaved(server) }
+                        onAction = withHaptic { viewModel.removeSaved(server) }
                     )
                 }
             }
@@ -96,10 +99,10 @@ fun HistoryScreen(
                         title = record.display,
                         subtitle = "${record.protocol.displayName} · 连接 ${record.connectCount} 次",
                         trailing = dateFmt.format(Date(record.lastConnected)),
-                        onClick = { onConnect(viewModel.recordToServer(record)) },
+                        onClick = withHaptic { onConnect(viewModel.recordToServer(record)) },
                         actionIcon = Icons.Filled.PlayArrow,
                         actionContentDescription = "连接",
-                        onAction = { onConnect(viewModel.recordToServer(record)) }
+                        onAction = withHaptic { onConnect(viewModel.recordToServer(record)) }
                     )
                 }
             }
@@ -122,7 +125,7 @@ private fun HistoryCard(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .clickable(onClick = onClick),
-        insideMargin = DpSize(16.dp, 16.dp)
+        insideMargin = PaddingValues(16.dp, 16.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

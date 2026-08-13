@@ -6,6 +6,7 @@ import com.xiaofeishu.audiostream.domain.model.ConnectionRecord
 import com.xiaofeishu.audiostream.domain.model.Protocol
 import com.xiaofeishu.audiostream.domain.model.SavedServer
 import com.xiaofeishu.audiostream.domain.model.ServerInfo
+import com.xiaofeishu.audiostream.domain.model.ThemeMode
 import com.xiaofeishu.audiostream.domain.repository.DiscoveryRepository
 import com.xiaofeishu.audiostream.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -74,10 +75,19 @@ class HomeViewModel @Inject constructor(
     /** 是否忽略播放页的蓝牙链路延迟警告提示。 */
     val hideSinkLatencyHint: StateFlow<Boolean> = settingsRepository.hideSinkLatencyHint
 
+    /** 当前应用配色方案。 */
+    val themeMode: StateFlow<ThemeMode> = settingsRepository.themeMode
+
+    /** 是否启用主要交互的触感反馈。默认开启。 */
+    val hapticFeedbackEnabled: StateFlow<Boolean> = settingsRepository.hapticFeedbackEnabled
+
+    fun setHapticFeedbackEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.saveHapticFeedbackEnabled(enabled) }
+    }
+
     fun setHideSinkLatencyHint(hidden: Boolean) {
         viewModelScope.launch { settingsRepository.saveHideSinkLatencyHint(hidden) }
     }
-
     fun startScan() = discoveryRepository.startScan()
     fun stopScan() = discoveryRepository.stopScan()
 
@@ -105,6 +115,10 @@ class HomeViewModel @Inject constructor(
 
     fun saveLatencyMode(mode: Int) {
         viewModelScope.launch { settingsRepository.saveLatencyMode(mode) }
+    }
+
+    fun saveThemeMode(mode: ThemeMode) {
+        viewModelScope.launch { settingsRepository.saveThemeMode(mode) }
     }
 
     fun clearHistory() {

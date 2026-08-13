@@ -48,11 +48,9 @@ fun SteppedSlider(
             fontWeight = FontWeight.Medium
         )
         Slider(
-            progress = sliderIndex.toFloat(),
-            minValue = 0f,
-            maxValue = values.lastIndex.toFloat().coerceAtLeast(1f),
-            effect = true,
-            onProgressChange = { raw ->
+            value = sliderIndex.toFloat(),
+            valueRange = 0f..values.lastIndex.toFloat().coerceAtLeast(1f),
+            onValueChange = { raw ->
                 val snapped = raw.roundToInt().coerceIn(0, values.lastIndex)
                 if (snapped != sliderIndex) {
                     sliderIndex = snapped

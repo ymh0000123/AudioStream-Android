@@ -11,6 +11,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- miuix-blur 0.9.x 声明 minSdk 32(Android 12L)，其 API 在低版本上有运行时保护，
+         通过 overrideLibrary 放行后，低版本自动回退为无毛玻璃效果。 -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
 
     <application
         android:name=".AudioStreamApp"
